@@ -1,4 +1,4 @@
-"""Macro Quant Research Terminal — institutional quantitative macro research."""
+"""Macro Quant Research Terminal V2.1 — production validation + yield curve intelligence."""
 from __future__ import annotations
 
 import streamlit as st
@@ -17,6 +17,7 @@ from modules import (
     m11_quant_state,
     m12_quant_lab,
 )
+from modules import v2_data_quality
 
 st.set_page_config(
     page_title="Quant Macro Terminal",
@@ -26,7 +27,7 @@ st.set_page_config(
 )
 
 THEMES = {
-    "Light — Research": {
+    "Light": {
         "bg": "#F5F7FA",
         "panel": "#FFFFFF",
         "ink": "#17202A",
@@ -34,7 +35,7 @@ THEMES = {
         "line": "#D9DEE7",
         "accent": "#174EA6",
     },
-    "Dark — Terminal": {
+    "Dark": {
         "bg": "#11151A",
         "panel": "#171C22",
         "ink": "#E6EDF3",
@@ -45,15 +46,20 @@ THEMES = {
 }
 
 if "ui_theme" not in st.session_state:
-    st.session_state.ui_theme = "Light — Research"
-theme_name = st.selectbox(
-    "Interface",
-    list(THEMES),
-    index=list(THEMES).index(st.session_state.ui_theme),
-    label_visibility="collapsed",
-)
-st.session_state.ui_theme = theme_name
-t = THEMES[theme_name]
+    st.session_state.ui_theme = "Light"
+
+with st.sidebar:
+    st.caption("Interface")
+    theme_name = st.radio(
+        "Theme",
+        list(THEMES),
+        index=list(THEMES).index(st.session_state.ui_theme) if st.session_state.ui_theme in THEMES else 0,
+        label_visibility="collapsed",
+        horizontal=True,
+    )
+    st.session_state.ui_theme = theme_name
+
+t = THEMES[st.session_state.ui_theme]
 
 st.markdown(
     f"""
@@ -74,7 +80,6 @@ header[data-testid="stHeader"] {{ background: transparent; }}
   border: 1px solid var(--line);
   padding: 12px 14px;
   border-radius: 6px;
-  box-shadow: none;
 }}
 [data-testid="stMetricValue"],
 [data-testid="stMetricLabel"] {{
@@ -102,7 +107,6 @@ button[data-baseweb="tab"][aria-selected="true"] {{
   border: 1px solid var(--line);
   border-radius: 5px;
 }}
-hr {{ border-color: var(--line); }}
 .terminal-header {{
   display: flex;
   align-items: center;
@@ -137,11 +141,7 @@ hr {{ border-color: var(--line); }}
   text-transform: uppercase;
   margin-bottom: 5px;
 }}
-.method-text {{
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}}
+.method-text {{ color: var(--muted); font-size: 12px; line-height: 1.5; }}
 .provenance {{
   color: var(--muted);
   font: 10px/1.5 "JetBrains Mono", monospace;
@@ -163,78 +163,19 @@ st.markdown(
 )
 
 MODULES = [
-    (
-        "Quant State",
-        m11_quant_state,
-        "Estado macro agregado: fatores, regime, risco e sinal composto.",
-        r"Q_t = w^\top Z_t",
-    ),
-    (
-        "Quant Lab",
-        m12_quant_lab,
-        "Fatores, sinais, risco, séries temporais, backtest e alocação.",
-        r"S_t = \sum_i w_i z_{i,t}",
-    ),
-    (
-        "Recessão",
-        m1_recession,
-        "Probabilidade de recessão nos EUA (Elastic Net Logit).",
-        r"P(y=1|X)=\sigma(\beta_0+X\beta)",
-    ),
-    (
-        "Regimes",
-        m2_regime_hmm,
-        "Regimes monetários latentes via HMM.",
-        r"P(S_t=j|S_{t-1}=i)=A_{ij}",
-    ),
-    (
-        "Quebra Estrutural",
-        m3_structural_break,
-        "Mudanças na estrutura estatística.",
-        r"C(\tau)=\sum_k\sum_{t\in I_k}(x_t-\bar{x}_{I_k})^2",
-    ),
-    (
-        "Phillips",
-        m4_phillips_curve,
-        "Relação entre desemprego e inflação.",
-        r"\pi_t = f(u_t,\pi_{t-12})+\varepsilon_t",
-    ),
-    (
-        "Nowcasting",
-        m5_nowcasting,
-        "Estimativa corrente da atividade.",
-        r"\widehat{IBC}_t = f(X_t)",
-    ),
-    (
-        "Câmbio",
-        m6_clustering,
-        "Clustering de regimes cambiais.",
-        r"\min_C\sum_j\sum_{x_i\in C_j}\|x_i-\mu_j\|^2",
-    ),
-    (
-        "Tendência",
-        m7_trend_cycle,
-        "Decomposição de tendência e ciclo.",
-        r"x \to z \to \hat{x}",
-    ),
-    (
-        "Sentimento",
-        m8_nlp_sentiment,
-        "Sinal hawkish/dovish em documentos.",
-        r"Score=1000(N_h-N_d)/N_{words}",
-    ),
-    (
-        "Anomalias",
-        m9_anomaly,
-        "Detecção de observações incomuns.",
-        r"s(x)=-Score_{IF}(x)",
-    ),
-    (
-        "Yield Curve",
-        m10_gp_yield_curve,
-        "Curva Treasury probabilística.",
-        r"f(x)\sim\mathcal{GP}(m(x),k(x,x'))",
-    ),
+    ("QUANT STATE", m11_quant_state, "Macro state: regime, score, factors, curve.", r"Q_t=w^\top Z_t"),
+    ("QUANT LAB", m12_quant_lab, "Factors · Signals · Risk · TS · Backtest · Portfolio.", r"S_t=\sum_i w_i z_{i,t}"),
+    ("YIELD CURVE", m10_gp_yield_curve, "Curve factors, GP construction, regime, history.", r"f\sim GP"),
+    ("DATA QUALITY", v2_data_quality, "Provenance e status de todas as séries.", r""),
+    ("Recessão", m1_recession, "Elastic Net Logit — probabilidade de recessão.", r"P(y=1|X)=\sigma(\beta_0+X\beta)"),
+    ("Regimes HMM", m2_regime_hmm, "HMM monetário legado.", r"P(S_t=j|S_{t-1}=i)=A_{ij}"),
+    ("Quebra", m3_structural_break, "Changepoint detection.", r"C(\tau)"),
+    ("Phillips", m4_phillips_curve, "Desemprego × inflação.", r"\pi_t=f(u_t)"),
+    ("Nowcasting", m5_nowcasting, "Atividade corrente.", r"\widehat{IBC}_t"),
+    ("Câmbio", m6_clustering, "Clustering cambial.", r"K-Means"),
+    ("Tendência", m7_trend_cycle, "Autoencoder tendência-ciclo.", r"x\to z\to\hat{x}"),
+    ("Sentimento", m8_nlp_sentiment, "Hawkish/dovish lexicon.", r"Score"),
+    ("Anomalias", m9_anomaly, "Isolation Forest.", r"s(x)"),
 ]
 
 tabs = st.tabs([x[0] for x in MODULES])
@@ -245,8 +186,9 @@ for tab, (name, module, description, formula) in zip(tabs, MODULES):
             f'<div class="method-text">{description}</div></div>',
             unsafe_allow_html=True,
         )
-        with st.expander("Metodologia", expanded=False):
-            st.latex(formula)
+        if formula:
+            with st.expander("Metodologia", expanded=False):
+                st.latex(formula)
         try:
             module.render()
         except RuntimeError as exc:
@@ -260,6 +202,6 @@ for tab, (name, module, description, formula) in zip(tabs, MODULES):
             st.caption(f"Detalhe operacional: {exc}")
 
 st.markdown(
-    '<div class="provenance">PUBLIC DATA · BCB/SGS + FRED · SEM DADOS SINTÉTICOS · CACHE 15 MIN</div>',
+    '<div class="provenance">PUBLIC DATA · BCB/SGS + FRED · SEM DADOS SINTÉTICOS · CACHE 15 MIN · V2.1</div>',
     unsafe_allow_html=True,
 )
