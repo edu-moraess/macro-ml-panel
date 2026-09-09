@@ -6,6 +6,7 @@ controlled errors; no synthetic or placeholder observations are ever generated.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from io import StringIO
 from typing import Final
 
 import pandas as pd
@@ -15,10 +16,11 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BCB_BASE: Final[str] = "https://api.bcb.gov.br/dados/serie/bcdata.sgs"
-FRED_API_URL: Final[str] = "https://api.stlouisfed.org/fred/series/observations"
+FRED_URL: Final[str] = "https://api.stlouisfed.org/fred/series/observations"
 CACHE_TTL_SECONDS: Final[int] = 900
-BCB_MAX_OBSERVATIONS: Final[int] = 10000
 HTTP_TIMEOUT_SECONDS: Final[int] = 10
+BCB_CHUNK_YEARS: Final[int] = 9
+BCB_DEFAULT_START: Final[str] = "2000-01-01"
 
 SGS: Final[dict[str, int]] = {
     "selic_meta": 432,
@@ -74,29 +76,56 @@ def _parse_bcb(payload: list[dict[str, object]], code: int) -> pd.Series:
     return series
 
 
+def _date_windows(start: pd.Timestamp, end: pd.Timestamp):
+    """Yield bounded SGS date windows compatible with the current API limits."""
+    cursor = start.normalize()
+    while cursor <= end:
+        window_end = min(cursor + pd.DateOffset(years=BCB_CHUNK_YEARS) - pd.Timedelta(days=1), end)
+        yield cursor, window_end
+        cursor = window_end + pd.Timedelta(days=1)
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Consultando BCB/SGS...")
 def get_bcb(code: int, start: str | None = None) -> pd.Series:
-    """Fetch real observations from the official BCB/SGS public API."""
+    """Fetch real observations from the official BCB/SGS public API.
+
+    Since March 2025 the SGS JSON/CSV endpoints require date filters and impose
+    bounded historical response sizes. The client therefore requests real data
+    in nine-year windows and merges the published observations locally.
+    """
     session = _session(retries=2)
     base = f"{BCB_BASE}.{int(code)}/dados"
-    params: dict[str, str] = {"formato": "json"}
-    if start:
-        params["dataInicial"] = pd.Timestamp(start).strftime("%d/%m/%Y")
+    requested_start = pd.Timestamp(start) if start else pd.Timestamp(BCB_DEFAULT_START)
+    requested_end = pd.Timestamp.now().normalize()
+    if requested_start > requested_end:
+        raise ValueError("data inicial posterior à data atual")
+
+    frames: list[pd.Series] = []
     try:
-        response = session.get(base, params=params, timeout=HTTP_TIMEOUT_SECONDS)
-        if response.status_code == 406:
-            response = session.get(
-                f"{base}/ultimos/{BCB_MAX_OBSERVATIONS}",
-                params={"formato": "json"},
-                timeout=HTTP_TIMEOUT_SECONDS,
-            )
-        response.raise_for_status()
-        series = _parse_bcb(response.json(), int(code))
-        if start:
-            series = series[series.index >= pd.Timestamp(start)]
+        for window_start, window_end in _date_windows(requested_start, requested_end):
+            params = {
+                "formato": "json",
+                "dataInicial": window_start.strftime("%d/%m/%Y"),
+                "dataFinal": window_end.strftime("%d/%m/%Y"),
+            }
+            response = session.get(base, params=params, timeout=HTTP_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            frames.append(_parse_bcb(response.json(), int(code)))
+
+        if not frames:
+            raise ValueError("nenhuma janela de consulta retornou dados")
+        series = pd.concat(frames).sort_index()
+        series = series[~series.index.duplicated(keep="last")]
+        series = series[series.index >= requested_start]
         if series.empty:
             raise ValueError("nenhuma observação atende ao período solicitado")
+        series.name = str(code)
         return series
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"BCB/SGS série {code}: conexão/API indisponível após {HTTP_TIMEOUT_SECONDS}s. "
+            "Fonte: BCData/SGS; sem fallback sintético."
+        ) from exc
     except Exception as exc:
         raise RuntimeError(
             f"BCB/SGS série {code}: {exc}. Fonte: BCData/SGS; sem fallback sintético."
@@ -105,19 +134,18 @@ def get_bcb(code: int, start: str | None = None) -> pd.Series:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_fred(code: str, start: str | None = None) -> pd.Series:
-    """Fetch real FRED observations through the official API using Streamlit Secrets."""
+    """Fetch real FRED observations through the official API using a Streamlit Secret."""
     code = str(code).strip().upper()
     if not code or not code.replace("_", "").isalnum():
         raise ValueError(f"Código FRED inválido: {code!r}")
-
-    api_key = str(st.secrets.get("FRED_API_KEY", "")).strip()
-    if not api_key:
+    try:
+        api_key = st.secrets["FRED_API_KEY"]
+    except Exception as exc:
         raise RuntimeError(
-            "FRED_API_KEY não configurada nos Streamlit Secrets. "
-            "Adicione a chave da FRED em Settings → Secrets. Fonte: FRED; sem fallback sintético."
-        )
+            "FRED_API_KEY não configurada nos Streamlit Secrets. Fonte: FRED; sem fallback sintético."
+        ) from exc
 
-    params: dict[str, str] = {
+    params = {
         "series_id": code,
         "api_key": api_key,
         "file_type": "json",
@@ -127,35 +155,26 @@ def get_fred(code: str, start: str | None = None) -> pd.Series:
         params["observation_start"] = pd.Timestamp(start).strftime("%Y-%m-%d")
 
     try:
-        response = _session(retries=0).get(
-            FRED_API_URL,
-            params=params,
-            timeout=HTTP_TIMEOUT_SECONDS,
-        )
+        response = _session(retries=0).get(FRED_URL, params=params, timeout=HTTP_TIMEOUT_SECONDS)
         response.raise_for_status()
         payload = response.json()
         observations = payload.get("observations")
         if not isinstance(observations, list) or not observations:
             raise ValueError("FRED retornou zero observações")
-
         df = pd.DataFrame(observations)
         if not {"date", "value"}.issubset(df.columns):
             raise ValueError("resposta FRED sem os campos obrigatórios 'date' e 'value'")
-
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
         series = df.dropna(subset=["date", "value"]).set_index("date")["value"].sort_index()
-
         if series.empty:
             raise ValueError("FRED retornou zero observações numéricas")
-
         series.name = code
         return series
     except requests.RequestException as exc:
         raise RuntimeError(
-            f"FRED série {code}: conexão indisponível após {HTTP_TIMEOUT_SECONDS}s. "
-            "Verifique FRED_API_KEY e o acesso de rede do Streamlit Cloud. "
-            "Fonte: Federal Reserve Bank of St. Louis; sem fallback sintético."
+            f"FRED série {code}: conexão/API indisponível após {HTTP_TIMEOUT_SECONDS}s. "
+            "Fonte: FRED; sem fallback sintético."
         ) from exc
     except Exception as exc:
         raise RuntimeError(
