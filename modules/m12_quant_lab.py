@@ -22,16 +22,22 @@ def render() -> None:
     x = state["panel"]
     score = signal["score_series"]
 
-    tabs = st.tabs(["FACTORS", "SIGNALS", "RISK", "TIME SERIES", "BACKTEST", "PORTFOLIO"])
+    section = st.radio(
+        "Research module",
+        ["FACTORS", "SIGNALS", "RISK", "TIME SERIES", "BACKTEST", "PORTFOLIO"],
+        horizontal=True,
+        key="quant_lab_section",
+        label_visibility="collapsed",
+    )
 
-    with tabs[0]:
+    if section == "FACTORS":
         st.dataframe(
             pd.Series(signal["z_latest"]).sort_values(ascending=False).to_frame("z-score").style.format("{:+.2f}"),
             use_container_width=True,
         )
         st.line_chart(factors, height=340)
 
-    with tabs[1]:
+    elif section == "SIGNALS":
         c = st.columns(4)
         c[0].metric("MACRO SCORE", f"{signal['macro_score']:+.1f}")
         c[1].metric("REGIME HINT", signal.get("regime_hint", "N/A"))
@@ -41,7 +47,7 @@ def render() -> None:
         st.line_chart(score.rename("MACRO SCORE"), height=280)
         st.caption("A confiança é um indicador composto de cobertura, concordância entre fatores, regime e qualidade dos dados; não é probabilidade de retorno.")
 
-    with tabs[2]:
+    elif section == "RISK":
         r = x["SP500"].pct_change().dropna()
         summary = RiskEngine.summary(r)
         if summary.get("status") != "OK":
@@ -54,12 +60,9 @@ def render() -> None:
             c[3].metric("ES 95%", f"{summary['es_95']:.2%}")
             c[4].metric("MAX DD", f"{summary['max_dd']:.2%}")
             c[5].metric("SHARPE", f"{summary['sharpe']:.2f}")
-            st.line_chart(
-                pd.DataFrame({"Vol": summary["vol_series"], "EWMA": summary["ewma_series"], "DD": summary["dd_series"]}),
-                height=300,
-            )
+            st.line_chart(pd.DataFrame({"Vol": summary["vol_series"], "EWMA": summary["ewma_series"], "DD": summary["dd_series"]}), height=300)
 
-    with tabs[3]:
+    elif section == "TIME SERIES":
         s = x["SP500"].pct_change().dropna()
         if len(s) > 36:
             lag = s.shift(1)
@@ -71,7 +74,7 @@ def render() -> None:
         else:
             st.warning("AMOSTRA INSUFICIENTE")
 
-    with tabs[4]:
+    elif section == "BACKTEST":
         bt = BacktestEngine(lag=1, threshold=0.15)
         result = bt.run(score, x["SP500"].pct_change())
         c = st.columns(5)
@@ -83,7 +86,7 @@ def render() -> None:
         st.line_chart(pd.DataFrame({"Strategy": result["equity"], "B&H": result["benchmark"]}), height=300)
         st.caption(f"Lag={result['lag']} · threshold={result['threshold']} · custos={result['cost_bps']:.1f} bps")
 
-    with tabs[5]:
+    elif section == "PORTFOLIO":
         try:
             assets = pd.concat(
                 {
