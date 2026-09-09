@@ -1,44 +1,52 @@
-# Macro Quant Research Terminal
+# Macro Quant Research Terminal (V2)
 
-Terminal quantitativo de pesquisa macro em Streamlit, construído exclusivamente sobre **dados públicos reais** (BCB/SGS + FRED).
+Terminal quantitativo institucional de pesquisa macroeconômica em Streamlit.
 
-Arquitetura orientada a:
+**Arquitetura**
 
-**dados reais → engenharia quantitativa → fatores → regime → sinais → risco → visualização institucional**
-
-Não utiliza dados sintéticos, mock ou fallback artificial. Falhas de API são expostas de forma controlada.
-
-## Execução
-
-```bash
-pip install -r requirements.txt
-# Configure FRED_API_KEY em .streamlit/secrets.toml
-streamlit run app.py
 ```
-
-## Fontes de dados
-
-| Fonte | Séries | Autenticação |
-|-------|--------|--------------|
-| BCB/SGS | Selic, IPCA, IBC-Br, PTAX, Desemprego PNAD | Nenhuma |
-| FRED | Term spread, USREC, VIX, HY OAS, S&P 500, WTI, Gold, etc. | `FRED_API_KEY` via Streamlit Secrets |
-
-## Módulos principais
-
-| Tab | Função |
-|-----|--------|
-| **Quant State** | Estado macro agregado (fatores, regime RISK-ON/OFF/NEUTRAL, score, data quality) |
-| **Quant Lab** | Factor / Signal / Risk / Time-Series / Backtest / Portfolio engines |
-| Recessão … Yield Curve | Módulos educacionais de macroeconometria + ML (preservados) |
+PUBLIC DATA (BCB/SGS + FRED)
+        ↓
+   DATA ENGINE          (cache, quality, alignment)
+        ↓
+ FEATURE ENGINE         (YoY, MoM, 3m, z-rolling, accel)
+        ↓
+  FACTOR ENGINE         (Growth, Inflation, Rates, FX, Liquidity, Momentum)
+        ↓
+  REGIME ENGINE         (HMM / GMM · probability · duration)
+        ↓
+  SIGNAL ENGINE         (MACRO SCORE · confidence · contributions)
+        ↓
+   RISK ENGINE          (VaR/ES, EWMA, DD, Sharpe/Sortino/Calmar)
+        ↓
+BACKTEST / PORTFOLIO    (lag≥1 · constraints · real returns)
+        ↓
+   QUANT TERMINAL
+```
 
 ## Princípios
 
-- **Dados reais apenas** — nenhuma série inventada.
-- **Look-ahead bias controlado** — sinais defasados no backtest.
-- **Rolling z-score** preferido a z-score global para séries não-estacionárias.
-- **Cache 15 min** (`st.cache_data`) — evita hammering de APIs.
-- **Mensagens controladas**: `DADOS INDISPONÍVEIS`, `AMOSTRA INSUFICIENTE`, `FALHA CONTROLADA`.
-- **UI institucional**: Light — Research / Dark — Terminal.
+- Dados públicos reais apenas. Sem sintético, mock ou inventado.
+- Causalidade temporal: `shift(1)` obrigatório no backtest.
+- Rolling z-score preferido a global.
+- Mensagens controladas: `DADOS INDISPONÍVEIS` · `AMOSTRA INSUFICIENTE` · `MODELO NÃO ESTIMÁVEL` · `FALHA CONTROLADA`.
+- Cache 15 min (`st.cache_data`).
+
+## Navegação
+
+1. QUANT STATE — macro dashboard (regime, score, factors)
+2. QUANT LAB — factors / signals / risk / TS / backtest / portfolio
+3. DATA QUALITY — provenance e freshness de todas as séries
+4. Legacy research modules (educacionais)
+
+## Instalação
+
+```bash
+pip install -r requirements.txt
+# .streamlit/secrets.toml
+# FRED_API_KEY = "sua_chave"
+streamlit run app.py
+```
 
 ## Testes
 
@@ -47,8 +55,9 @@ PYTHONPATH=. pytest tests/ -q
 python -m compileall -q .
 ```
 
-## Limitações conhecidas
+## Limitações
 
-- FRED exige chave configurada; sem ela os módulos dependentes de FRED falham de forma controlada.
-- Modelos avançados (ARIMA completo, GARCH-X, VECM, Black-Litterman) não estão plenamente estimados no Lab por restrições de amostra e dependências; diagnósticos básicos estão presentes.
-- HMM e changepoint dependem de pacotes opcionais (`hmmlearn`, `ruptures`); há fallbacks controlados.
+- FRED requer chave; sem ela falha de forma controlada.
+- HMM requer `hmmlearn` (fallback GMM).
+- Time-series lab: AR(1) diagnóstico; ARIMA/GARCH/VAR completos exigem amostra e não estão forçados.
+- Black-Litterman e stress histórico completo não implementados (dados/expectativas).
