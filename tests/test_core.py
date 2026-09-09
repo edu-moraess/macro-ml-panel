@@ -1,4 +1,4 @@
-"""Tests for core quant engines — real logic, no synthetic market data required."""
+"""Unit tests for core quant engines using deterministic fixtures."""
 from __future__ import annotations
 
 import numpy as np
@@ -10,10 +10,11 @@ from core.risk import RiskEngine
 from core.backtest import BacktestEngine
 from core.portfolio import PortfolioEngine
 from core.regimes import RegimeEngine
+from core.historical_validation import forward_return, max_drawdown_forward
 from data_utils import rolling_zscore
 
 
-def _synth_returns(n=120, seed=0):
+def _returns(n=120, seed=0):
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2015-01-01", periods=n, freq="MS")
     return pd.Series(rng.normal(0.005, 0.04, n), index=idx)
@@ -38,22 +39,55 @@ def test_factor_engine_shapes():
 
 
 def test_risk_summary():
-    r = _synth_returns(100)
+    r = _returns(100)
     s = RiskEngine.summary(r)
     assert s["status"] == "OK"
     assert s["var_95"] >= 0
     assert s["max_dd"] <= 0
+    assert s["annualization"] == 12
+
+
+def test_sortino_uses_downside_deviation():
+    r = pd.Series([0.10, -0.05, 0.02, -0.01, 0.03, 0.01], index=pd.date_range("2020-01-01", periods=6, freq="MS"))
+    value = RiskEngine.sortino(r, ann=12, mar=0.0)
+    downside = np.sqrt(np.mean(np.minimum(r.to_numpy(), 0.0) ** 2))
+    expected = r.mean() / downside * np.sqrt(12)
+    assert value == pytest.approx(expected)
 
 
 def test_backtest_lag_enforced():
     with pytest.raises(ValueError):
         BacktestEngine(lag=0)
-    sig = _synth_returns(80)
-    ret = _synth_returns(80, seed=2)
-    bt = BacktestEngine(lag=1, threshold=0.1)
-    out = bt.run(sig, ret)
+    sig = _returns(80)
+    ret = _returns(80, seed=2)
+    out = BacktestEngine(lag=1, threshold=0.1).run(sig, ret)
     assert out["lag"] == 1
     assert "equity" in out
+    assert out["exposed_periods"] <= len(out["positions"])
+
+
+def test_backtest_does_not_convert_missing_returns_to_zero():
+    idx = pd.date_range("2020-01-01", periods=6, freq="MS")
+    sig = pd.Series([1, 1, 1, 1, 1, 1], index=idx, dtype=float)
+    ret = pd.Series([0.01, np.nan, 0.02, 0.01, 0.01, 0.01], index=idx)
+    out = BacktestEngine(lag=1, threshold=0.0).run(sig, ret)
+    assert out["strat_returns"].notna().all()
+    assert len(out["strat_returns"]) == 4
+
+
+def test_forward_return_requires_complete_window():
+    idx = pd.date_range("2020-01-01", periods=6, freq="MS")
+    r = pd.Series([0.01, 0.02, np.nan, 0.01, 0.02, 0.01], index=idx)
+    fwd = forward_return(r, 2)
+    assert pd.isna(fwd.iloc[0])
+    assert fwd.iloc[3] == pytest.approx((1.01 * 1.02) - 1.0)
+
+
+def test_forward_drawdown_requires_complete_window():
+    idx = pd.date_range("2020-01-01", periods=5, freq="MS")
+    r = pd.Series([0.01, -0.02, np.nan, 0.03, 0.01], index=idx)
+    mdd = max_drawdown_forward(r, 2)
+    assert pd.isna(mdd.iloc[0])
 
 
 def test_portfolio_weights_sum():
@@ -65,6 +99,7 @@ def test_portfolio_weights_sum():
         w = pe.weights(assets)
         assert abs(w.sum() - 1.0) < 1e-6
         assert (w >= -1e-9).all()
+        assert (w <= 0.7 + 1e-9).all()
 
 
 def test_regime_insufficient_sample():
