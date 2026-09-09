@@ -10,6 +10,7 @@ from core.factors import FactorEngine
 from core.regimes import RegimeEngine
 from core.signals import SignalEngine
 from core.historical_validation import HistoricalValidationEngine
+from core.lineage import build_lineage
 from core.yield_curve import (
     load_history,
     historical_spreads,
@@ -88,6 +89,23 @@ class MacroIntelligence:
         except Exception as exc:
             validation = {"status": "ERROR", "detail": str(exc)}
 
+        lineage = build_lineage(
+            inputs=[
+                {"name": "growth", "source": "BCB/SGS", "series_id": "24363+24369"},
+                {"name": "inflation", "source": "BCB/SGS", "series_id": "433"},
+                {"name": "rates", "source": "BCB/SGS", "series_id": "432"},
+                {"name": "fx", "source": "BCB/SGS", "series_id": "1"},
+                {"name": "liquidity", "source": "FRED", "series_id": "BAMLH0A0HYM2+VIXCLS"},
+                {"name": "momentum", "source": "FRED", "series_id": "SP500"},
+                {"name": "curve", "source": "FRED", "series_id": "DGS3MO+DGS2+DGS10+DGS30"},
+            ],
+            factors=factors,
+            regime=regime_info,
+            signal=sig,
+            validation=validation,
+            curve_persistence=curve_pers,
+        )
+
         return {
             "factors": factors,
             "regime": regime_info,
@@ -95,4 +113,5 @@ class MacroIntelligence:
             "curve_persistence": curve_pers,
             "validation": validation,
             "history_labeled": hist_labeled,
+            "lineage": lineage,
         }
