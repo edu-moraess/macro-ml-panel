@@ -6,7 +6,6 @@ controlled errors; no synthetic or placeholder observations are ever generated.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from io import StringIO
 from typing import Final
 
 import pandas as pd
@@ -36,31 +35,29 @@ FRED: Final[dict[str, str]] = {
     "unrate": "UNRATE",
     "cpi_yoy": "CPIAUCSL",
     "fedfunds": "FEDFUNDS",
+    "sp500": "SP500",
+    "vix": "VIXCLS",
+    "ust10y": "DGS10",
+    "ust2y": "DGS2",
+    "hy_spread": "BAMLH0A0HYM2",
+    "wti": "DCOILWTICO",
+    "gold": "GOLDAMGBD228NLBM",
+    "brl_usd": "DEXBZUS",
 }
 
 
 def _session(retries: int = 1) -> requests.Session:
-    """Create an HTTP session with a bounded retry policy for public data."""
-    retry = Retry(
-        total=retries,
-        connect=retries,
-        read=retries,
-        backoff_factor=0.4,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET",),
-        raise_on_status=False,
-    )
+    retry = Retry(total=retries, connect=retries, read=retries, backoff_factor=0.4,
+                  status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("GET",),
+                  raise_on_status=False)
     session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Macro-ML-Panel/2.2 (+research; public-data-client)",
-        "Accept": "application/json, text/csv, */*",
-    })
+    session.headers.update({"User-Agent": "Macro-ML-Panel/3.0 (+quant-research; public-data-client)",
+                             "Accept": "application/json, text/csv, */*"})
     session.mount("https://", HTTPAdapter(max_retries=retry))
     return session
 
 
 def _parse_bcb(payload: list[dict[str, object]], code: int) -> pd.Series:
-    """Validate and normalize a BCData/SGS JSON payload."""
     if not isinstance(payload, list) or not payload:
         raise ValueError("BCB retornou uma lista vazia")
     df = pd.DataFrame(payload)
@@ -77,7 +74,6 @@ def _parse_bcb(payload: list[dict[str, object]], code: int) -> pd.Series:
 
 
 def _date_windows(start: pd.Timestamp, end: pd.Timestamp):
-    """Yield bounded SGS date windows compatible with the current API limits."""
     cursor = start.normalize()
     while cursor <= end:
         window_end = min(cursor + pd.DateOffset(years=BCB_CHUNK_YEARS) - pd.Timedelta(days=1), end)
@@ -87,31 +83,20 @@ def _date_windows(start: pd.Timestamp, end: pd.Timestamp):
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Consultando BCB/SGS...")
 def get_bcb(code: int, start: str | None = None) -> pd.Series:
-    """Fetch real observations from the official BCB/SGS public API.
-
-    Since March 2025 the SGS JSON/CSV endpoints require date filters and impose
-    bounded historical response sizes. The client therefore requests real data
-    in nine-year windows and merges the published observations locally.
-    """
     session = _session(retries=2)
     base = f"{BCB_BASE}.{int(code)}/dados"
     requested_start = pd.Timestamp(start) if start else pd.Timestamp(BCB_DEFAULT_START)
     requested_end = pd.Timestamp.now().normalize()
     if requested_start > requested_end:
         raise ValueError("data inicial posterior à data atual")
-
     frames: list[pd.Series] = []
     try:
         for window_start, window_end in _date_windows(requested_start, requested_end):
-            params = {
-                "formato": "json",
+            response = session.get(base, params={"formato": "json",
                 "dataInicial": window_start.strftime("%d/%m/%Y"),
-                "dataFinal": window_end.strftime("%d/%m/%Y"),
-            }
-            response = session.get(base, params=params, timeout=HTTP_TIMEOUT_SECONDS)
+                "dataFinal": window_end.strftime("%d/%m/%Y")}, timeout=HTTP_TIMEOUT_SECONDS)
             response.raise_for_status()
             frames.append(_parse_bcb(response.json(), int(code)))
-
         if not frames:
             raise ValueError("nenhuma janela de consulta retornou dados")
         series = pd.concat(frames).sort_index()
@@ -122,43 +107,27 @@ def get_bcb(code: int, start: str | None = None) -> pd.Series:
         series.name = str(code)
         return series
     except requests.RequestException as exc:
-        raise RuntimeError(
-            f"BCB/SGS série {code}: conexão/API indisponível após {HTTP_TIMEOUT_SECONDS}s. "
-            "Fonte: BCData/SGS; sem fallback sintético."
-        ) from exc
+        raise RuntimeError(f"BCB/SGS série {code}: conexão/API indisponível após {HTTP_TIMEOUT_SECONDS}s. Fonte: BCData/SGS; sem fallback sintético.") from exc
     except Exception as exc:
-        raise RuntimeError(
-            f"BCB/SGS série {code}: {exc}. Fonte: BCData/SGS; sem fallback sintético."
-        ) from exc
+        raise RuntimeError(f"BCB/SGS série {code}: {exc}. Fonte: BCData/SGS; sem fallback sintético.") from exc
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_fred(code: str, start: str | None = None) -> pd.Series:
-    """Fetch real FRED observations through the official API using a Streamlit Secret."""
     code = str(code).strip().upper()
     if not code or not code.replace("_", "").isalnum():
         raise ValueError(f"Código FRED inválido: {code!r}")
     try:
         api_key = st.secrets["FRED_API_KEY"]
     except Exception as exc:
-        raise RuntimeError(
-            "FRED_API_KEY não configurada nos Streamlit Secrets. Fonte: FRED; sem fallback sintético."
-        ) from exc
-
-    params = {
-        "series_id": code,
-        "api_key": api_key,
-        "file_type": "json",
-        "sort_order": "asc",
-    }
+        raise RuntimeError("FRED_API_KEY não configurada nos Streamlit Secrets. Fonte: FRED; sem fallback sintético.") from exc
+    params = {"series_id": code, "api_key": api_key, "file_type": "json", "sort_order": "asc"}
     if start:
         params["observation_start"] = pd.Timestamp(start).strftime("%Y-%m-%d")
-
     try:
         response = _session(retries=0).get(FRED_URL, params=params, timeout=HTTP_TIMEOUT_SECONDS)
         response.raise_for_status()
-        payload = response.json()
-        observations = payload.get("observations")
+        observations = response.json().get("observations")
         if not isinstance(observations, list) or not observations:
             raise ValueError("FRED retornou zero observações")
         df = pd.DataFrame(observations)
@@ -172,18 +141,12 @@ def get_fred(code: str, start: str | None = None) -> pd.Series:
         series.name = code
         return series
     except requests.RequestException as exc:
-        raise RuntimeError(
-            f"FRED série {code}: conexão/API indisponível após {HTTP_TIMEOUT_SECONDS}s. "
-            "Fonte: FRED; sem fallback sintético."
-        ) from exc
+        raise RuntimeError(f"FRED série {code}: conexão/API indisponível após {HTTP_TIMEOUT_SECONDS}s. Fonte: FRED; sem fallback sintético.") from exc
     except Exception as exc:
-        raise RuntimeError(
-            f"FRED série {code}: {exc}. Fonte: Federal Reserve Bank of St. Louis; sem fallback sintético."
-        ) from exc
+        raise RuntimeError(f"FRED série {code}: {exc}. Fonte: Federal Reserve Bank of St. Louis; sem fallback sintético.") from exc
 
 
 def align(*series: pd.Series, freq: str = "MS") -> pd.DataFrame:
-    """Resample and inner-align real series at a common frequency."""
     out = pd.concat([s.resample(freq).mean().rename(s.name) for s in series], axis=1).dropna()
     if out.empty:
         raise ValueError("as séries reais não possuem janela comum suficiente")
@@ -191,9 +154,5 @@ def align(*series: pd.Series, freq: str = "MS") -> pd.DataFrame:
 
 
 def data_status(source: str, reference: str, last_date: pd.Timestamp) -> str:
-    """Return a compact provenance line for the research UI."""
     updated = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    return (
-        f"Fonte: {source} · Série: {reference} · Última observação: {last_date:%Y-%m-%d} · "
-        f"Consulta: {updated} · Cache TTL: {CACHE_TTL_SECONDS // 60} min"
-    )
+    return f"Fonte: {source} · Série: {reference} · Última observação: {last_date:%Y-%m-%d} · Consulta: {updated} · Cache TTL: {CACHE_TTL_SECONDS // 60} min"
