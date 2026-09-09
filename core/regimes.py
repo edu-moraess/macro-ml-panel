@@ -1,13 +1,15 @@
-"""Regime Engine 2.0 — HMM/GMM with probabilities, duration, transitions, persistence.
+"""Regime Engine 2.1 — cached HMM/GMM with probabilities, duration, transitions, persistence.
 
 Fallback to GMM is EXPLICIT (method field never claims HMM when GMM is used).
+The fitted model is cached by Streamlit so ordinary UI reruns do not refit it.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import streamlit as st
 
 try:
     from hmmlearn.hmm import GaussianHMM
@@ -15,6 +17,32 @@ try:
 except ImportError:
     HMM_AVAILABLE = False
     from sklearn.mixture import GaussianMixture
+
+
+@st.cache_resource(show_spinner=False)
+def _fit_model_cached(
+    X: pd.DataFrame, n_regimes: int, random_state: int
+) -> Tuple[Any, np.ndarray, str]:
+    """Fit and cache the regime model for an identical cleaned feature matrix."""
+    if HMM_AVAILABLE:
+        model = GaussianHMM(
+            n_components=n_regimes,
+            covariance_type="diag",
+            n_iter=200,
+            random_state=random_state,
+        )
+        model.fit(X.values)
+        labels = model.predict(X.values)
+        return model, labels, "HMM"
+
+    model = GaussianMixture(
+        n_components=n_regimes,
+        random_state=random_state,
+        covariance_type="diag",
+    )
+    model.fit(X.values)
+    labels = model.predict(X.values)
+    return model, labels, "GMM"
 
 
 class RegimeEngine:
@@ -37,24 +65,9 @@ class RegimeEngine:
         data = X.replace([np.inf, -np.inf], np.nan).dropna()
         if len(data) < 36:
             raise ValueError("AMOSTRA INSUFICIENTE após limpeza de NaN.")
-        arr = data.values
-        if HMM_AVAILABLE:
-            self.model = GaussianHMM(
-                n_components=self.n_regimes,
-                covariance_type="diag",
-                n_iter=200,
-                random_state=self.random_state,
-            )
-            self.model.fit(arr)
-            self.labels_ = self.model.predict(arr)
-            self.method = "HMM"
-        else:
-            self.model = GaussianMixture(
-                n_components=self.n_regimes, random_state=self.random_state, covariance_type="diag"
-            )
-            self.model.fit(arr)
-            self.labels_ = self.model.predict(arr)
-            self.method = "GMM"
+        self.model, self.labels_, self.method = _fit_model_cached(
+            data, self.n_regimes, self.random_state
+        )
         self._index = data.index
         self._X = data
         self._build_name_map()
@@ -160,8 +173,8 @@ class RegimeEngine:
         }
 
     def history_labeled(self) -> pd.Series:
-        st = self.current()
-        if "history" not in st or not st.get("name_map"):
+        stt = self.current()
+        if "history" not in stt or not stt.get("name_map"):
             return pd.Series(dtype=object)
-        nm = st["name_map"]
-        return st["history"].map(lambda x: nm.get(int(x), str(x)))
+        nm = stt["name_map"]
+        return stt["history"].map(lambda x: nm.get(int(x), str(x)))
