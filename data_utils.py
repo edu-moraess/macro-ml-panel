@@ -1,13 +1,13 @@
 """Data access layer for the Macro-ML Panel.
 
-Only public, real observations are accepted. The BCB/SGS client uses the official
-JSON interface and a bounded retry strategy; it never fabricates observations.
+Only public, real observations are accepted. Network failures are surfaced as
+controlled errors; no synthetic or placeholder observations are ever generated.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Final
 from io import StringIO
+from typing import Final
 
 import pandas as pd
 import requests
@@ -16,9 +16,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BCB_BASE: Final[str] = "https://api.bcb.gov.br/dados/serie/bcdata.sgs"
-FRED_URL: Final[str] = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}"
+FRED_URL: Final[str] = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}&download=1"
 CACHE_TTL_SECONDS: Final[int] = 900
 BCB_MAX_OBSERVATIONS: Final[int] = 10000
+HTTP_TIMEOUT_SECONDS: Final[int] = 10
 
 SGS: Final[dict[str, int]] = {
     "selic_meta": 432,
@@ -37,20 +38,20 @@ FRED: Final[dict[str, str]] = {
 }
 
 
-def _session() -> requests.Session:
-    """Create an HTTP session with conservative retries for transient failures."""
+def _session(retries: int = 1) -> requests.Session:
+    """Create an HTTP session with a bounded retry policy for public data."""
     retry = Retry(
-        total=3,
-        connect=3,
-        read=3,
-        backoff_factor=0.7,
+        total=retries,
+        connect=retries,
+        read=retries,
+        backoff_factor=0.4,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=("GET",),
         raise_on_status=False,
     )
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Macro-ML-Panel/2.0 (+research; public-data-client)",
+        "User-Agent": "Macro-ML-Panel/2.1 (+research; public-data-client)",
         "Accept": "application/json, text/csv, */*",
     })
     session.mount("https://", HTTPAdapter(max_retries=retry))
@@ -76,24 +77,19 @@ def _parse_bcb(payload: list[dict[str, object]], code: int) -> pd.Series:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Consultando BCB/SGS...")
 def get_bcb(code: int, start: str | None = None) -> pd.Series:
-    """Fetch real observations from the official BCB/SGS public API.
-
-    A 406 from hosted environments is retried through the official /ultimos/N
-    endpoint. Both paths contain only observations published by BCB; no synthetic
-    fallback is ever generated.
-    """
-    session = _session()
+    """Fetch real observations from the official BCB/SGS public API."""
+    session = _session(retries=2)
     base = f"{BCB_BASE}.{int(code)}/dados"
     params: dict[str, str] = {"formato": "json"}
     if start:
         params["dataInicial"] = pd.Timestamp(start).strftime("%d/%m/%Y")
     try:
-        response = session.get(base, params=params, timeout=20)
+        response = session.get(base, params=params, timeout=HTTP_TIMEOUT_SECONDS)
         if response.status_code == 406:
             response = session.get(
                 f"{base}/ultimos/{BCB_MAX_OBSERVATIONS}",
                 params={"formato": "json"},
-                timeout=20,
+                timeout=HTTP_TIMEOUT_SECONDS,
             )
         response.raise_for_status()
         series = _parse_bcb(response.json(), int(code))
@@ -108,23 +104,46 @@ def get_bcb(code: int, start: str | None = None) -> pd.Series:
         ) from exc
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Consultando FRED...")
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_fred(code: str, start: str | None = None) -> pd.Series:
-    """Fetch a real FRED series from its public CSV endpoint."""
+    """Fetch a real FRED series through the public CSV download endpoint.
+
+    The request is deliberately bounded so a blocked/slow FRED connection cannot
+    leave the Streamlit page spinning indefinitely. No fallback data are created.
+    """
+    code = str(code).strip().upper()
+    if not code or not code.replace("_", "").isalnum():
+        raise ValueError(f"Código FRED inválido: {code!r}")
+
+    url = FRED_URL.format(code=code)
     try:
-        response = _session().get(FRED_URL.format(code=code), timeout=20)
+        response = _session(retries=0).get(url, timeout=HTTP_TIMEOUT_SECONDS)
         response.raise_for_status()
+        if not response.text.strip():
+            raise ValueError("FRED retornou uma resposta vazia")
+
         df = pd.read_csv(StringIO(response.text))
-        df.columns = ["date", "value"]
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        series = df.dropna().set_index("date")["value"].sort_index()
+        if df.shape[1] < 2:
+            raise ValueError(f"CSV FRED inválido: {df.shape[1]} coluna(s) recebida(s)")
+
+        date_col = "DATE" if "DATE" in df.columns else df.columns[0]
+        value_col = code if code in df.columns else df.columns[1]
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
+        series = df.dropna(subset=[date_col, value_col]).set_index(date_col)[value_col].sort_index()
+
         if start:
             series = series[series.index >= pd.Timestamp(start)]
         if series.empty:
-            raise ValueError("resposta FRED vazia para o período solicitado")
+            raise ValueError("FRED retornou zero observações numéricas para o período solicitado")
+
         series.name = code
         return series
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"FRED série {code}: conexão indisponível após {HTTP_TIMEOUT_SECONDS}s. "
+            "Verifique o acesso de rede do Streamlit Cloud. Fonte: FRED; sem fallback sintético."
+        ) from exc
     except Exception as exc:
         raise RuntimeError(
             f"FRED série {code}: {exc}. Fonte: Federal Reserve Bank of St. Louis; sem fallback sintético."
