@@ -1,4 +1,4 @@
-# Macro Quant Research Terminal (V2.2)
+# Macro Quant Research Terminal
 
 Quantitative macro research infrastructure — **not** investment advice.
 
@@ -7,17 +7,19 @@ PUBLIC DATA (BCB/SGS + FRED)
         ↓
    DATA ENGINE + Data Quality
         ↓
- FEATURE → FACTOR → CURVE → REGIME 2.0 → SIGNAL → HISTORICAL VALIDATION
+ FEATURE → FACTOR → CURVE → REGIME → SIGNAL → HISTORICAL VALIDATION
         ↓
    MACRO INTELLIGENCE DASHBOARD
 ```
 
-## V2.2 Macro Intelligence
+## Macro Intelligence
 
-- **Regime Engine 2.0**: RISK-ON / NEUTRAL / RISK-OFF with full probability vector, duration, previous, transition, stay probability. Method field is **HMM** or **GMM** (explicit fallback).
-- **Signal Engine**: MACRO SCORE ≈ 50·tanh(Σ wᵢ zᵢ) on [-100,+100]; factor contributions; confidence = 0.3·coverage + 0.3·agreement + 0.25·regime_p + 0.15·data_ok.
-- **Historical Validation**: event study for score thresholds and regime transitions; forward +1M/+3M/+6M returns **from t+1** (anti-lookahead).
-- **Yield Curve 2.0**: rolling mean/std/z/percentile on spreads; curve regime persistence; GP construction unchanged from V2.1.
+- **Regime Engine**: RISK-ON / NEUTRAL / RISK-OFF with probability vector, duration, previous state, transition and stay probability. Method is **HMM** or **GMM** when the fallback is required.
+- **Signal Engine**: MACRO SCORE ≈ 50·tanh(Σ wᵢ zᵢ) on [-100,+100]; factor contributions and confidence.
+- **Historical Validation**: event studies and regime-transition studies; forward +1M/+3M/+6M outcomes **from t+1** to enforce anti-lookahead.
+- **Yield Curve Intelligence**: rolling spread statistics, curve regime persistence and Gaussian-process construction.
+- **Data Lineage**: reproducible metadata for inputs, factors, models, signals, curve state and validation without storing secrets.
+- **Model caching**: fitted regime models are cached as Streamlit resources to avoid unnecessary refits on reruns.
 
 ## Anti-lookahead
 
@@ -25,7 +27,7 @@ PUBLIC DATA (BCB/SGS + FRED)
 
 ## Navigation
 
-MACRO INTELLIGENCE · QUANT STATE · QUANT LAB · YIELD CURVE · DATA QUALITY · legacy
+MACRO INTELLIGENCE · QUANT STATE · QUANT LAB · YIELD CURVE · DATA QUALITY · legacy research modules
 
 Header: **QUANT RESEARCH / Macro Terminal**. Theme Light/Dark in sidebar only.
 
@@ -39,9 +41,16 @@ PYTHONPATH=. pytest -q
 python -m compileall -q core
 ```
 
+## Data policy
+
+- Public data only: BCB/SGS and FRED.
+- No synthetic, mock or fallback datasets.
+- Data failures and insufficient samples are exposed explicitly.
+- API credentials are never included in lineage output.
+
 ## Limitations
 
 - FRED requires API key.
-- HMM needs hmmlearn (GMM fallback is labeled as GMM).
-- Historical validation depends on overlapping sample of signal and equity returns.
+- HMM needs hmmlearn; GMM is used when the HMM path cannot be fitted.
+- Historical validation depends on the overlapping sample of signals and asset returns.
 - Curve regimes remain rule-based on observed spreads.
