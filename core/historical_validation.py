@@ -1,57 +1,68 @@
-"""Historical Validation Engine — forward outcomes with mandatory lag (anti-lookahead).
+"""Historical Validation Engine — forward outcomes with mandatory lag.
 
-CRITICAL: signal(t) is always paired with outcome measured from t+1 onward.
+Signal(t) is paired only with outcomes measured from t+1 onward.
+Missing observations are preserved as missing; they are never treated as zero.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
 
 
+def _forward_compound_returns(r: pd.Series, horizon: int) -> pd.Series:
+    """Compound the next ``horizon`` observations only when all are present."""
+    if horizon < 1:
+        raise ValueError("horizon must be >= 1")
+    values = pd.to_numeric(r, errors="coerce")
+    out = pd.Series(np.nan, index=values.index, dtype=float)
+    for i in range(len(values) - horizon):
+        window = values.iloc[i + 1 : i + 1 + horizon]
+        if len(window) == horizon and window.notna().all():
+            out.iloc[i] = float(np.prod(1.0 + window.to_numpy(dtype=float)) - 1.0)
+    return out
+
+
 def forward_return(prices_or_rets: pd.Series, horizon: int, is_return: bool = True) -> pd.Series:
-    r = prices_or_rets if is_return else prices_or_rets.pct_change()
-    one = (1 + r.fillna(0))
-    inv = one.iloc[::-1]
-    roll = inv.rolling(horizon, min_periods=horizon).apply(np.prod, raw=True)
-    fwd = roll.iloc[::-1].shift(-1) - 1.0
-    fwd.name = f"fwd_{horizon}"
-    return fwd
+    """Return from t+1 through t+h, excluding incomplete forward windows."""
+    r = pd.to_numeric(prices_or_rets, errors="coerce")
+    if not is_return:
+        r = r.pct_change()
+    out = _forward_compound_returns(r, horizon)
+    out.name = f"fwd_{horizon}"
+    return out
 
 
 def max_drawdown_forward(r: pd.Series, horizon: int) -> pd.Series:
-    out = pd.Series(index=r.index, dtype=float)
-    vals = r.values
-    n = len(vals)
-    for i in range(n - horizon):
-        window = vals[i + 1 : i + 1 + horizon]
-        wealth = np.cumprod(1 + np.nan_to_num(window, nan=0.0))
-        if len(wealth) == 0:
-            out.iloc[i] = np.nan
+    """Maximum drawdown over the next h observations; incomplete windows are NaN."""
+    values = pd.to_numeric(r, errors="coerce")
+    out = pd.Series(np.nan, index=values.index, dtype=float)
+    for i in range(len(values) - horizon):
+        window = values.iloc[i + 1 : i + 1 + horizon]
+        if len(window) != horizon or window.isna().any():
             continue
+        wealth = np.cumprod(1.0 + window.to_numpy(dtype=float))
         peak = np.maximum.accumulate(wealth)
-        dd = (wealth / peak - 1).min()
-        out.iloc[i] = dd
+        out.iloc[i] = float(np.min(wealth / peak - 1.0))
     return out
 
 
 class HistoricalValidationEngine:
     def __init__(self, horizons: Tuple[int, ...] = (1, 3, 6)):
-        self.horizons = horizons
+        if not horizons or any(h < 1 for h in horizons):
+            raise ValueError("horizons must contain positive integers")
+        self.horizons = tuple(horizons)
 
     def build_forward_panel(self, signal: pd.Series, asset_returns: pd.Series) -> pd.DataFrame:
-        sig = signal.dropna()
-        ret = asset_returns.reindex(sig.index).dropna()
-        common = sig.index.intersection(ret.index)
-        sig = sig.reindex(common)
-        ret = ret.reindex(common)
-        panel = pd.DataFrame({"signal": sig})
+        sig = pd.to_numeric(signal, errors="coerce").dropna()
+        ret = pd.to_numeric(asset_returns, errors="coerce").reindex(sig.index)
+        panel = pd.DataFrame({"signal": sig, "asset_return": ret})
         for h in self.horizons:
             panel[f"fwd_{h}m"] = forward_return(ret, h, is_return=True)
             panel[f"mdd_{h}m"] = max_drawdown_forward(ret, h)
-        panel = panel.dropna(subset=[f"fwd_{h}m" for h in self.horizons], how="any")
-        return panel
+        required = [f"fwd_{h}m" for h in self.horizons]
+        return panel.dropna(subset=required, how="any")
 
     def event_study(self, panel: pd.DataFrame, condition: str, threshold: float = -40.0) -> Dict[str, Any]:
         if panel.empty or "signal" not in panel.columns:
@@ -72,58 +83,42 @@ class HistoricalValidationEngine:
             return {"status": "AMOSTRA INSUFICIENTE", "n": n, "label": label}
         result: Dict[str, Any] = {"status": "OK", "n": n, "label": label, "horizons": {}}
         for h in self.horizons:
-            col = f"fwd_{h}m"
-            x = sub[col].dropna()
-            hit = float((x > 0).mean()) if len(x) else np.nan
+            x = sub[f"fwd_{h}m"].dropna()
             result["horizons"][f"+{h}M"] = {
                 "avg": float(x.mean()) if len(x) else np.nan,
                 "median": float(x.median()) if len(x) else np.nan,
-                "hit_ratio": hit,
-                "vol": float(x.std()) if len(x) else np.nan,
+                "hit_ratio": float((x > 0).mean()) if len(x) else np.nan,
+                "vol": float(x.std()) if len(x) > 1 else np.nan,
                 "mdd_avg": float(sub[f"mdd_{h}m"].mean()) if f"mdd_{h}m" in sub else np.nan,
             }
         return result
 
-    def regime_transition_study(
-        self,
-        regime_labels: pd.Series,
-        asset_returns: pd.Series,
-        from_state: str,
-        to_state: str,
-    ) -> Dict[str, Any]:
+    def regime_transition_study(self, regime_labels: pd.Series, asset_returns: pd.Series, from_state: str, to_state: str) -> Dict[str, Any]:
         labels = regime_labels.dropna()
         prev = labels.shift(1)
         transitions = (prev == from_state) & (labels == to_state)
         dates = labels.index[transitions.fillna(False)]
         if len(dates) < 3:
             return {"status": "AMOSTRA INSUFICIENTE", "n": len(dates), "label": f"{from_state} → {to_state}"}
-        panel_rows = []
-        ret = asset_returns.reindex(labels.index)
+        ret = pd.to_numeric(asset_returns, errors="coerce").reindex(labels.index)
+        rows = []
         for t in dates:
+            loc = ret.index.get_indexer([t])[0]
+            if loc < 0:
+                continue
             row = {"date": t}
             for h in self.horizons:
-                loc = ret.index.get_loc(t)
-                if isinstance(loc, slice):
-                    continue
-                if loc + h >= len(ret):
-                    row[f"fwd_{h}m"] = np.nan
-                    continue
                 window = ret.iloc[loc + 1 : loc + 1 + h]
-                row[f"fwd_{h}m"] = float(np.prod(1 + window.fillna(0)) - 1)
-            panel_rows.append(row)
-        df = pd.DataFrame(panel_rows).dropna(how="all")
-        n = len(df)
-        out: Dict[str, Any] = {
-            "status": "OK" if n >= 3 else "AMOSTRA INSUFICIENTE",
-            "n": n,
-            "label": f"{from_state} → {to_state}",
-            "horizons": {},
-        }
+                row[f"fwd_{h}m"] = (
+                    float(np.prod(1.0 + window.to_numpy(dtype=float)) - 1.0)
+                    if len(window) == h and window.notna().all()
+                    else np.nan
+                )
+            rows.append(row)
+        df = pd.DataFrame(rows).set_index("date") if rows else pd.DataFrame()
+        out: Dict[str, Any] = {"status": "OK" if len(df) >= 3 else "AMOSTRA INSUFICIENTE", "n": len(df), "label": f"{from_state} → {to_state}", "horizons": {}}
         for h in self.horizons:
-            col = f"fwd_{h}m"
-            if col not in df.columns:
-                continue
-            x = df[col].dropna()
+            x = df.get(f"fwd_{h}m", pd.Series(dtype=float)).dropna()
             out["horizons"][f"+{h}M"] = {
                 "avg": float(x.mean()) if len(x) else np.nan,
                 "median": float(x.median()) if len(x) else np.nan,
