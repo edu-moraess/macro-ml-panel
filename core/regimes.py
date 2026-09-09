@@ -1,7 +1,10 @@
-"""Regime Engine V2 — HMM / GMM based macro regimes on real factor data."""
+"""Regime Engine 2.0 — HMM/GMM with probabilities, duration, transitions, persistence.
+
+Fallback to GMM is EXPLICIT (method field never claims HMM when GMM is used).
+"""
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -15,14 +18,15 @@ except ImportError:
 
 
 class RegimeEngine:
-    """Fit latent regimes. Requires sufficient sample. No synthetic labels."""
-
     def __init__(self, n_regimes: int = 3, random_state: int = 42):
         self.n_regimes = n_regimes
         self.random_state = random_state
         self.model = None
         self.labels_: Optional[np.ndarray] = None
         self.method: str = "none"
+        self._index = None
+        self._X = None
+        self._name_map: Dict[int, str] = {}
 
     def fit(self, X: pd.DataFrame) -> "RegimeEngine":
         if X is None or len(X) < max(36, self.n_regimes * 12):
@@ -53,23 +57,10 @@ class RegimeEngine:
             self.method = "GMM"
         self._index = data.index
         self._X = data
+        self._build_name_map()
         return self
 
-    def current(self) -> Dict:
-        if self.labels_ is None or self.model is None:
-            return {"regime": "N/A", "probability": 0.0, "method": self.method}
-        last_label = int(self.labels_[-1])
-        if self.method == "HMM" and hasattr(self.model, "predict_proba"):
-            try:
-                proba = self.model.predict_proba(self._X.values)[-1]
-            except Exception:
-                proba = np.zeros(self.n_regimes)
-                proba[last_label] = 1.0
-        elif hasattr(self.model, "predict_proba"):
-            proba = self.model.predict_proba(self._X.values)[-1]
-        else:
-            proba = np.zeros(self.n_regimes)
-            proba[last_label] = 1.0
+    def _build_name_map(self) -> None:
         means = {}
         for k in range(self.n_regimes):
             mask = self.labels_ == k
@@ -87,28 +78,85 @@ class RegimeEngine:
         else:
             for i, k in enumerate(ordered):
                 name_map[k] = f"REGIME-{i}"
+        self._name_map = name_map
+
+    def _proba_vector(self) -> np.ndarray:
+        last_label = int(self.labels_[-1])
+        if hasattr(self.model, "predict_proba"):
+            try:
+                return self.model.predict_proba(self._X.values)[-1]
+            except Exception:
+                pass
+        proba = np.zeros(self.n_regimes)
+        proba[last_label] = 1.0
+        return proba
+
+    def persistence_stats(self) -> Dict[str, Any]:
+        labels = self.labels_
+        n = len(labels)
         duration = 1
-        for i in range(len(self.labels_) - 2, -1, -1):
-            if self.labels_[i] == last_label:
+        for i in range(n - 2, -1, -1):
+            if labels[i] == labels[-1]:
                 duration += 1
             else:
                 break
+        spells = []
+        cur, length = labels[0], 1
+        for i in range(1, n):
+            if labels[i] == cur:
+                length += 1
+            else:
+                spells.append(length)
+                cur, length = labels[i], 1
+        spells.append(length)
+        avg_duration = float(np.mean(spells)) if spells else np.nan
+        n_trans = int(np.sum(labels[1:] != labels[:-1]))
+        freq = {name: float(np.mean(labels == k)) for k, name in self._name_map.items()}
+        cur_lab = labels[-1]
+        mask_from = labels[:-1] == cur_lab
+        stay = float(np.mean(labels[1:][mask_from] == cur_lab)) if mask_from.any() else np.nan
         prev = "—"
-        if len(self.labels_) > duration:
-            prev_label = int(self.labels_[-(duration + 1)])
-            prev = name_map.get(prev_label, str(prev_label))
+        if n > duration:
+            prev = self._name_map.get(int(labels[-(duration + 1)]), str(labels[-(duration + 1)]))
+        transition_label = f"{prev} → {self._name_map.get(int(labels[-1]), str(labels[-1]))}"
         return {
-            "regime": name_map.get(last_label, f"R{last_label}"),
+            "duration": duration,
+            "avg_duration": avg_duration,
+            "n_transitions": n_trans,
+            "frequency": freq,
+            "stay_probability": stay,
+            "previous": prev,
+            "transition": transition_label,
+        }
+
+    def current(self) -> Dict[str, Any]:
+        if self.labels_ is None or self.model is None:
+            return {"regime": "N/A", "probability": 0.0, "method": self.method, "probabilities": {}}
+        last_label = int(self.labels_[-1])
+        proba = self._proba_vector()
+        if proba.sum() > 0:
+            proba = proba / proba.sum()
+        probs_named = {self._name_map.get(i, str(i)): float(proba[i]) * 100 for i in range(len(proba))}
+        confidence = float(proba.max())
+        pers = self.persistence_stats()
+        return {
+            "regime": self._name_map.get(last_label, f"R{last_label}"),
             "label": last_label,
             "probability": float(proba[last_label]) * 100,
-            "proba_vector": {name_map.get(i, str(i)): float(proba[i]) * 100 for i in range(len(proba))},
-            "duration_months": duration,
-            "previous": prev,
+            "probabilities": probs_named,
+            "confidence": confidence,
+            "duration_months": pers["duration"],
+            "avg_duration": pers["avg_duration"],
+            "n_transitions": pers["n_transitions"],
+            "frequency": pers["frequency"],
+            "stay_probability": pers["stay_probability"],
+            "previous": pers["previous"],
+            "transition": pers["transition"],
             "method": self.method,
-            "transition": getattr(self.model, "transmat_", None),
+            "transition_matrix": getattr(self.model, "transmat_", None),
             "n_obs": len(self.labels_),
             "history": pd.Series(self.labels_, index=self._index, name="regime"),
-            "name_map": name_map,
+            "name_map": self._name_map,
         }
 
     def history_labeled(self) -> pd.Series:
