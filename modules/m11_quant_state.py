@@ -1,76 +1,39 @@
-"""Module 11 — Quant State Engine.
-
-Transforms observed macro/market series into standardized quantitative factors,
-a composite regime score and a simple risk state. No synthetic observations.
-"""
+"""Quant State — canonical macro factors, signal and regime."""
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
 import streamlit as st
 
-from data_utils import FRED, SGS, align, data_status, get_bcb, get_fred
-
-
-def _zscore(s: pd.Series, window: int = 60) -> pd.Series:
-    mean = s.rolling(window, min_periods=max(24, window // 2)).mean()
-    std = s.rolling(window, min_periods=max(24, window // 2)).std()
-    return (s - mean) / std.replace(0, np.nan)
+from core.macro_state import build_macro_state, load_macro_panel
+from data_utils import data_status
 
 
 def render() -> None:
     st.header("Quant State Engine")
     st.caption(
-        "Camada quantitativa que transforma observações macroeconômicas reais em fatores "
-        "padronizados, regime, risco e sinais compostos."
+        "Estado macroeconômico canônico: dados reais → fatores → sinal composto → regime estatístico."
     )
+    lookback = st.slider("Janela de padronização (meses)", 36, 120, 60, step=12, key="quant_state_window")
 
-    lookback = st.slider("Janela de padronização (meses)", 36, 120, 60, step=12)
-
-    selic = get_bcb(SGS["selic_meta"]).resample("MS").mean().rename("selic")
-    ipca = get_bcb(SGS["ipca_mensal"]).resample("MS").mean().rename("ipca")
-    cambio = get_bcb(SGS["cambio_ptax"]).resample("MS").mean().rename("cambio")
-    desemprego = get_bcb(SGS["desemprego_pnad"]).resample("MS").mean().rename("desemprego")
-    spread = get_fred(FRED["t10y3m"]).resample("MS").mean().rename("term_spread")
-
-    df = align(selic, ipca, cambio, desemprego, spread)
-    df["fx_mom"] = df["cambio"].pct_change(3) * 100
-    df["inflation_mom"] = df["ipca"].diff(3)
-    df["rates_mom"] = df["selic"].diff(3)
-    df["unemployment_mom"] = df["desemprego"].diff(3)
-    df = df.dropna()
-
-    if len(df) < max(60, lookback):
-        raise ValueError(f"Apenas {len(df)} observações mensais disponíveis; amostra insuficiente para a janela escolhida.")
-
-    # Economic sign convention: higher growth/risk appetite is positive.
-    factors = pd.DataFrame(index=df.index)
-    factors["Growth"] = -_zscore(df["unemployment_mom"], lookback) + _zscore(df["term_spread"], lookback)
-    factors["Inflation"] = _zscore(df["inflation_mom"], lookback)
-    factors["Rates"] = _zscore(df["rates_mom"], lookback)
-    factors["FX"] = -_zscore(df["fx_mom"], lookback)
-    factors["Risk"] = factors["Growth"] - factors["Inflation"] - factors["Rates"] + factors["FX"]
-    factors = factors.replace([np.inf, -np.inf], np.nan).dropna()
-
+    state = build_macro_state(load_macro_panel(), window=lookback)
+    factors = state["factors"]
+    signal = state["signal"]
+    regime = state["regime"]
     latest = factors.iloc[-1]
-    regime_score = float(np.tanh(latest["Risk"] / 2.0))
-    regime = "RISK-ON" if regime_score >= 0.25 else "RISK-OFF" if regime_score <= -0.25 else "NEUTRAL"
-    probability = 50.0 + 50.0 * abs(regime_score)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("REGIME", regime)
-    c2.metric("REGIME SCORE", f"{regime_score:+.2f}")
-    c3.metric("CONFIDENCE", f"{probability:.1f}%")
+    c1.metric("REGIME", regime.get("regime", "N/A"))
+    c2.metric("MACRO SCORE", f"{signal.get('macro_score', float('nan')):+.1f}")
+    c3.metric("SIGNAL CONFIDENCE", f"{signal.get('confidence', 0.0):.1f}%")
     c4.metric("OBSERVAÇÕES", f"{len(factors):,}")
 
     st.subheader("Factor State")
     st.dataframe(latest.to_frame("z-score").style.format("{:+.2f}"), use_container_width=True)
-    st.line_chart(factors[["Growth", "Inflation", "Rates", "FX"]], height=320)
+    st.line_chart(factors, height=320)
 
     st.subheader("Composite Quant Signal")
-    st.line_chart(factors["Risk"], height=260)
+    st.line_chart(signal["score_series"].rename("MACRO SCORE"), height=260)
     st.caption(
-        "O score é um indicador quantitativo de estado, não uma recomendação de investimento. "
-        "Os fatores são padronizados em janela móvel para reduzir dependência de escala."
+        "O MACRO SCORE é um indicador quantitativo de estado, não uma recomendação de investimento. "
+        "O regime é estimado pelo Regime Engine; a confiança do sinal não representa uma probabilidade estatística de retorno."
     )
-    st.caption(data_status("BCB/SGS + FRED", "432 / 433 / 1 / 24369 / T10Y3M", factors.index.max()))
+    st.caption(data_status("BCB/SGS + FRED", "macro state canonical panel", factors.index.max()))
