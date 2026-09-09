@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
+import streamlit as st
 
 from data_utils import FRED, SGS, align, get_bcb, get_fred
 from core.factors import FactorEngine
@@ -15,8 +16,9 @@ from core.model_cache import fit_regime_engine
 from core.signals import SignalEngine
 
 
+@st.cache_data(ttl=900, show_spinner=False)
 def load_macro_panel() -> pd.DataFrame:
-    """Load the real BCB/FRED monthly panel required by the canonical state."""
+    """Load and cache the real BCB/FRED monthly panel for 15 minutes."""
     return align(
         get_bcb(SGS["ibc_br"]).resample("MS").mean().rename("IBC"),
         get_bcb(SGS["desemprego_pnad"]).resample("MS").mean().rename("U"),
@@ -53,10 +55,8 @@ def build_macro_state(panel: pd.DataFrame, window: int = 60) -> dict[str, Any]:
         raise ValueError("AMOSTRA INSUFICIENTE para Macro State")
 
     se = SignalEngine(fe)
-    signal = se.latest(factors, regime_prob=0.0, data_ok_ratio=1.0)
-
     regime_info: dict[str, Any] = {
-        "regime": "N/A", "probability": 0.0, "method": "none", "probabilities": {}
+        "regime": "N/A", "probability": 50.0, "method": "none", "probabilities": {}
     }
     regime_cols = [c for c in ["Growth", "Inflation", "Liquidity", "Momentum", "Curve"] if c in factors]
     try:
@@ -69,7 +69,7 @@ def build_macro_state(panel: pd.DataFrame, window: int = 60) -> dict[str, Any]:
 
     signal = se.latest(
         factors,
-        regime_prob=float(regime_info.get("probability", 0.0)),
+        regime_prob=float(regime_info.get("probability", 50.0)),
         data_ok_ratio=1.0,
     )
     return {
