@@ -16,16 +16,17 @@ THEMES = {
     "Light": {"bg":"#F5F7FA","panel":"#FFFFFF","ink":"#17202A","muted":"#667085","line":"#D9DEE7","accent":"#174EA6"},
     "Dark": {"bg":"#11151A","panel":"#171C22","ink":"#E6EDF3","muted":"#8B98A8","line":"#2A333D","accent":"#58A6FF"},
 }
+
+# Theme is kept as application state rather than exposed through a sidebar.
 if "ui_theme" not in st.session_state:
     st.session_state.ui_theme = "Light"
-with st.sidebar:
-    st.caption("Interface")
-    theme_name = st.radio("Theme", list(THEMES), index=list(THEMES).index(st.session_state.ui_theme), label_visibility="collapsed", horizontal=True)
-    st.session_state.ui_theme = theme_name
 
 t = THEMES[st.session_state.ui_theme]
 st.markdown(f"""
 <style>
+[data-testid="stSidebar"] {{ display: none !important; }}
+[data-testid="stSidebarNav"] {{ display: none !important; }}
+section[data-testid="stSidebar"] {{ display: none !important; }}
 :root {{--bg:{t['bg']};--panel:{t['panel']};--ink:{t['ink']};--muted:{t['muted']};--line:{t['line']};--accent:{t['accent']};}}
 .stApp{{background:var(--bg);color:var(--ink);}} .block-container{{max-width:1540px;padding-top:.8rem;padding-bottom:2rem;}}
 header[data-testid="stHeader"]{{background:transparent;}} [data-testid="stMetric"]{{background:var(--panel);border:1px solid var(--line);padding:12px 14px;border-radius:6px;}}
