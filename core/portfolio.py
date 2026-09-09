@@ -1,7 +1,7 @@
-"""Portfolio Engine V2 — allocation methods on real returns, constraints."""
+"""Portfolio Engine — allocation methods on observed return series."""
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -10,73 +10,90 @@ from core.risk import RiskEngine
 
 
 class PortfolioEngine:
-    def __init__(
-        self,
-        method: str = "inverse_vol",
-        max_weight: float = 0.50,
-        min_weight: float = 0.0,
-        no_short: bool = True,
-    ):
+    def __init__(self, method: str = "inverse_vol", max_weight: float = 0.50, min_weight: float = 0.0, no_short: bool = True, ann: int = 12):
+        if max_weight <= 0 or min_weight < 0 or min_weight > max_weight or ann <= 0:
+            raise ValueError("invalid portfolio constraints")
         self.method = method
         self.max_weight = max_weight
         self.min_weight = min_weight
         self.no_short = no_short
+        self.ann = ann
 
-    def _apply_constraints(self, w: np.ndarray) -> np.ndarray:
+    def _project_constraints(self, w: np.ndarray) -> np.ndarray:
+        w = np.asarray(w, dtype=float)
+        if not np.isfinite(w).all():
+            raise ValueError("non-finite portfolio weights")
         if self.no_short:
             w = np.maximum(w, 0.0)
-        w = np.clip(w, self.min_weight, self.max_weight)
-        s = w.sum()
-        if s <= 0:
-            w = np.ones_like(w) / len(w)
-        else:
-            w = w / s
-        w = np.clip(w, self.min_weight, self.max_weight)
+        if w.sum() <= 0:
+            w = np.ones_like(w)
         w = w / w.sum()
+        for _ in range(100):
+            old = w.copy()
+            w = np.clip(w, self.min_weight, self.max_weight)
+            w = w / w.sum()
+            if np.max(np.abs(w - old)) < 1e-10:
+                break
+        if np.any(w < self.min_weight - 1e-8) or np.any(w > self.max_weight + 1e-8):
+            raise ValueError("incompatible portfolio weight constraints")
         return w
 
     def weights(self, returns: pd.DataFrame) -> pd.Series:
-        r = returns.dropna()
+        r = returns.apply(pd.to_numeric, errors="coerce").dropna(how="any")
         if len(r) < 24 or r.shape[1] < 2:
-            raise ValueError("AMOSTRA INSUFICIENTE para portfolio.")
-        cov = r.cov().values * 12
-        vol = np.sqrt(np.diag(cov))
+            raise ValueError("AMOSTRA INSUFICIENTE para portfolio")
+        cov = r.cov().to_numpy() * self.ann
+        cov = (cov + cov.T) / 2.0
+        eig_min = np.linalg.eigvalsh(cov).min()
+        if eig_min < 0:
+            cov += np.eye(len(cov)) * (-eig_min + 1e-10)
+        vol = np.sqrt(np.maximum(np.diag(cov), 1e-12))
         n = r.shape[1]
+
         if self.method == "equal":
             w = np.ones(n) / n
         elif self.method == "inverse_vol":
-            inv = 1.0 / np.maximum(vol, 1e-8)
+            inv = 1.0 / vol
             w = inv / inv.sum()
         elif self.method == "min_var":
-            try:
-                inv_cov = np.linalg.pinv(cov)
-                ones = np.ones(n)
-                w = inv_cov @ ones
-                w = w / w.sum() if w.sum() != 0 else ones / n
-            except Exception:
-                w = np.ones(n) / n
+            inv_cov = np.linalg.pinv(cov, rcond=1e-10)
+            ones = np.ones(n)
+            raw = inv_cov @ ones
+            w = raw / raw.sum() if abs(raw.sum()) > 1e-12 else ones / n
         elif self.method == "risk_parity":
-            w = 1.0 / np.maximum(vol, 1e-8)
+            w = 1.0 / vol
             w = w / w.sum()
-            for _ in range(20):
-                marg = cov @ w
-                rc = w * marg
-                w = w * (rc.mean() / np.maximum(rc, 1e-12))
-                w = w / w.sum()
+            for _ in range(200):
+                mrc = cov @ w
+                rc = w * mrc
+                target = rc.mean()
+                if target <= 0:
+                    break
+                updated = w * target / np.maximum(rc, 1e-12)
+                updated = updated / updated.sum()
+                if np.max(np.abs(updated - w)) < 1e-8:
+                    w = updated
+                    break
+                w = updated
         else:
-            w = np.ones(n) / n
-        w = self._apply_constraints(w)
+            raise ValueError(f"unknown portfolio method: {self.method}")
+
+        w = self._project_constraints(w)
         return pd.Series(w, index=r.columns, name="weight")
 
     def evaluate(self, returns: pd.DataFrame) -> Dict:
-        w = self.weights(returns)
-        port = (returns.dropna() @ w).rename("portfolio")
+        r = returns.apply(pd.to_numeric, errors="coerce").dropna(how="any")
+        w = self.weights(r)
+        port = (r @ w).rename("portfolio")
+        cov = r.cov() * self.ann
+        rc = (w * (cov @ w)).rename("rc")
         return {
             "weights": w,
             "returns": port,
-            "vol": float(port.std() * np.sqrt(12)),
-            "sharpe": RiskEngine.sharpe(port),
+            "vol": float(port.std(ddof=1) * np.sqrt(self.ann)),
+            "sharpe": RiskEngine.sharpe(port, self.ann),
             "max_dd": RiskEngine.max_drawdown(port),
-            "equity": (1 + port).cumprod(),
-            "risk_contribution": (w * (returns.dropna().cov() * 12 @ w)).rename("rc"),
+            "equity": (1.0 + port).cumprod(),
+            "risk_contribution": rc,
+            "annualization": self.ann,
         }
