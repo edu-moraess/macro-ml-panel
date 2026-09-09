@@ -1,34 +1,16 @@
-"""
-Módulo 8 — Sentimento hawkish/dovish (texto-como-dado)
-Ideia: quantificar o tom de atas/comunicados de política monetária com um
-score léxico simples, na linha da literatura de "text-as-data" em banca
-central. Cole seus próprios trechos — os exemplos abaixo são ilustrativos,
-escritos apenas para demonstrar o mecanismo (não são citações de atas reais).
-"""
+"""Module 8 — transparent hawkish/dovish text scoring."""
+from __future__ import annotations
+
 import re
 import pandas as pd
 import streamlit as st
 
-HAWKISH = [
-    "aperto", "elevar", "elevação", "vigilância", "persistente", "acima da meta",
-    "restritiva", "tighten", "hike", "elevated", "persistent", "vigilant", "restrictive",
-]
-DOVISH = [
-    "afrouxamento", "reduzir", "redução", "estímulo", "acomodatícia", "queda",
-    "ease", "cut", "accommodative", "slack", "below target", "stimulus",
-]
-
-EXEMPLO = (
-    "2024-06-01;O Comitê mantém vigilância e considera necessária uma postura mais "
-    "restritiva diante da inflação persistente.\n"
-    "2024-09-01;Diante da desaceleração da atividade, o Comitê vê espaço para reduzir "
-    "o ritmo de aperto monetário.\n"
-    "2025-01-01;O cenário atual indica espaço para afrouxamento gradual e uma postura "
-    "mais acomodatícia adiante."
-)
+HAWKISH = ["aperto", "elevar", "elevação", "vigilância", "persistente", "acima da meta", "restritiva", "tighten", "hike", "elevated", "persistent", "vigilant", "restrictive"]
+DOVISH = ["afrouxamento", "reduzir", "redução", "estímulo", "acomodatícia", "queda", "ease", "cut", "accommodative", "slack", "below target", "stimulus"]
 
 
-def _score(texto: str) -> dict:
+def _score(texto: str) -> dict[str, float]:
+    """Score supplied central-bank text using a transparent lexical dictionary."""
     palavras = re.findall(r"[a-zà-úçã-õ]+", texto.lower())
     n = max(len(palavras), 1)
     h = sum(texto.lower().count(t) for t in HAWKISH)
@@ -36,28 +18,26 @@ def _score(texto: str) -> dict:
     return {"palavras": n, "hawkish": h, "dovish": d, "score (por 1000 palavras)": (h - d) / n * 1000}
 
 
-def render():
+def render() -> None:
+    """Score real user-supplied statements; no illustrative text is injected."""
     st.header("8 · Sentimento hawkish/dovish em comunicados")
-    st.caption(
-        "Score léxico: conta termos hawkish vs. dovish por 1.000 palavras. "
-        "Cole trechos no formato `data;texto`, um por linha."
-    )
+    st.caption("Cole comunicados reais no formato `data;texto`, um por linha. Nenhum texto sintético é carregado automaticamente.")
 
-    raw = st.text_area("Comunicados", value=EXEMPLO, height=160)
-
-    rows = []
+    raw = st.text_area("Comunicados reais", value="", height=190, placeholder="2026-08-01;[cole aqui o comunicado real]")
+    rows: list[dict[str, float | str]] = []
     for line in raw.strip().splitlines():
         if ";" not in line:
             continue
         data, texto = line.split(";", 1)
-        r = _score(texto)
-        r["data"] = data.strip()
-        rows.append(r)
+        result = _score(texto)
+        result["data"] = data.strip()
+        rows.append(result)
 
     if not rows:
-        st.warning("Adicione ao menos uma linha no formato `data;texto`.")
+        st.info("Aguardando texto real. O módulo não gera exemplo sintético para preencher a tela.")
         return
 
     df = pd.DataFrame(rows).set_index("data")
     st.line_chart(df["score (por 1000 palavras)"])
-    st.dataframe(df)
+    st.dataframe(df, use_container_width=True)
+    st.info("Limitação: score lexical mede associação de termos, não identifica contexto, ironia ou causalidade. A fonte textual deve ser registrada pelo pesquisador.")
