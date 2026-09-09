@@ -1,4 +1,4 @@
-"""Macro Quant Research Terminal V2.1 — production validation + yield curve intelligence."""
+"""Macro Quant Research Terminal V2.2 — macro intelligence and historical validation."""
 from __future__ import annotations
 
 import streamlit as st
@@ -18,6 +18,7 @@ from modules import (
     m12_quant_lab,
 )
 from modules import v2_data_quality
+from modules import v22_macro_intelligence
 
 st.set_page_config(
     page_title="Quant Macro Terminal",
@@ -163,6 +164,7 @@ st.markdown(
 )
 
 MODULES = [
+    ("MACRO INTELLIGENCE", v22_macro_intelligence, "Score · Regime · Contributions · Historical Validation.", r"S_t \to R_t \to E[r_{t+h}]"),
     ("QUANT STATE", m11_quant_state, "Macro state: regime, score, factors, curve.", r"Q_t=w^\top Z_t"),
     ("QUANT LAB", m12_quant_lab, "Factors · Signals · Risk · TS · Backtest · Portfolio.", r"S_t=\sum_i w_i z_{i,t}"),
     ("YIELD CURVE", m10_gp_yield_curve, "Curve factors, GP construction, regime, history.", r"f\sim GP"),
@@ -202,6 +204,6 @@ for tab, (name, module, description, formula) in zip(tabs, MODULES):
             st.caption(f"Detalhe operacional: {exc}")
 
 st.markdown(
-    '<div class="provenance">PUBLIC DATA · BCB/SGS + FRED · SEM DADOS SINTÉTICOS · CACHE 15 MIN · V2.1</div>',
+    '<div class="provenance">PUBLIC DATA · BCB/SGS + FRED · SEM DADOS SINTÉTICOS · CACHE 15 MIN · V2.2</div>',
     unsafe_allow_html=True,
 )
