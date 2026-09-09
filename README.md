@@ -1,63 +1,44 @@
-# Macro Quant Research Terminal (V2)
+# Macro Quant Research Terminal (V2.1)
 
-Terminal quantitativo institucional de pesquisa macroeconômica em Streamlit.
-
-**Arquitetura**
+Institutional quantitative macro research terminal. Public data only (BCB/SGS + FRED).
 
 ```
-PUBLIC DATA (BCB/SGS + FRED)
-        ↓
-   DATA ENGINE          (cache, quality, alignment)
-        ↓
- FEATURE ENGINE         (YoY, MoM, 3m, z-rolling, accel)
-        ↓
-  FACTOR ENGINE         (Growth, Inflation, Rates, FX, Liquidity, Momentum)
-        ↓
-  REGIME ENGINE         (HMM / GMM · probability · duration)
-        ↓
-  SIGNAL ENGINE         (MACRO SCORE · confidence · contributions)
-        ↓
-   RISK ENGINE          (VaR/ES, EWMA, DD, Sharpe/Sortino/Calmar)
-        ↓
-BACKTEST / PORTFOLIO    (lag≥1 · constraints · real returns)
-        ↓
-   QUANT TERMINAL
+PUBLIC DATA → DATA ENGINE → FEATURE ENGINE → FACTOR ENGINE
+     → REGIME ENGINE → SIGNAL / RISK → BACKTEST / PORTFOLIO
+     → YIELD CURVE INTELLIGENCE → QUANT TERMINAL
 ```
 
-## Princípios
+## Yield Curve Intelligence
 
-- Dados públicos reais apenas. Sem sintético, mock ou inventado.
-- Causalidade temporal: `shift(1)` obrigatório no backtest.
-- Rolling z-score preferido a global.
-- Mensagens controladas: `DADOS INDISPONÍVEIS` · `AMOSTRA INSUFICIENTE` · `MODELO NÃO ESTIMÁVEL` · `FALHA CONTROLADA`.
-- Cache 15 min (`st.cache_data`).
+- Real FRED constant-maturity Treasury vertices (3M…30Y)
+- **Level / Slope (10Y−2Y, 10Y−3M, 30Y−10Y) / Curvature (2Y − 2×10Y + 30Y)**
+- Curve regime: INVERTED · FLATTENING · NORMAL · STEEPENING · LONG-END PRESSURE
+- Gaussian Process (RBF + WhiteKernel) for **curve construction/smoothing only**
+  - length_scale = maturity correlation scale (years), not temporal memory
+  - RMSE / MAE / residuals reported
+  - **GP is not a causal macro forecast model**
+- Historical spreads (2s10s, 3m10y, 10s30s)
+- Curve factor optionally integrated into MACRO SCORE (documented weight)
 
-## Navegação
+## Navigation
 
-1. QUANT STATE — macro dashboard (regime, score, factors)
-2. QUANT LAB — factors / signals / risk / TS / backtest / portfolio
-3. DATA QUALITY — provenance e freshness de todas as séries
-4. Legacy research modules (educacionais)
+QUANT STATE · QUANT LAB · YIELD CURVE · DATA QUALITY · legacy modules
 
-## Instalação
+Header: **QUANT RESEARCH / Macro Terminal** only. Theme (Light/Dark) is discrete in the sidebar.
+
+## Install
 
 ```bash
 pip install -r requirements.txt
-# .streamlit/secrets.toml
-# FRED_API_KEY = "sua_chave"
+# .streamlit/secrets.toml → FRED_API_KEY = "..."
 streamlit run app.py
-```
-
-## Testes
-
-```bash
-PYTHONPATH=. pytest tests/ -q
+PYTHONPATH=. pytest -q
 python -m compileall -q .
 ```
 
-## Limitações
+## Limitations
 
-- FRED requer chave; sem ela falha de forma controlada.
-- HMM requer `hmmlearn` (fallback GMM).
-- Time-series lab: AR(1) diagnóstico; ARIMA/GARCH/VAR completos exigem amostra e não estão forçados.
-- Black-Litterman e stress histórico completo não implementados (dados/expectativas).
+- FRED requires API key; BCB is public.
+- HMM needs `hmmlearn` (GMM fallback).
+- Full ARIMA/GARCH/VAR/VECM/Black-Litterman not forced without sufficient sample.
+- Curve regimes are rule-based on observed spreads (documented thresholds).
