@@ -1,4 +1,4 @@
-"""Macro-ML Panel — institutional-style research terminal."""
+"""Macro-ML Panel — quantitative macro research terminal."""
 from __future__ import annotations
 
 import streamlit as st
@@ -6,22 +6,23 @@ import streamlit as st
 from modules import (
     m1_recession, m2_regime_hmm, m3_structural_break, m4_phillips_curve,
     m5_nowcasting, m6_clustering, m7_trend_cycle, m8_nlp_sentiment,
-    m9_anomaly, m10_gp_yield_curve,
+    m9_anomaly, m10_gp_yield_curve, m11_quant_state,
 )
 
-st.set_page_config(page_title="Macro-ML Research Terminal", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Quantitative Macro Research Terminal", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
 MODULES = [
-    ("Recessão", m1_recession, "Probabilidade de recessão nos EUA usando o spread de juros e um Logit com regularização Elastic Net.", r"P(y_{t+h}=1\mid X_t)=\sigma(\beta_0+X_t\beta),\quad \sigma(z)=\frac{1}{1+e^{-z}}", "Elastic Net combina L1 e L2 na estimação dos coeficientes. O modelo usa spread 10Y–3M, variação de 3 meses e mínimo móvel de 6 meses para prever a recessão NBER no horizonte escolhido."),
-    ("Regimes", m2_regime_hmm, "Identificação não supervisionada de regimes de política monetária a partir da dinâmica dos juros.", r"P(S_t=j\mid S_{t-1}=i)=A_{ij},\quad \Delta i_t\mid S_t=j\sim\mathcal{N}(\mu_j,\sigma_j^2)", "O Hidden Markov Model estima estados latentes, distribuição da variação dos juros em cada estado e matriz de transição. Os regimes não recebem rótulos econômicos previamente impostos."),
-    ("Quebra Estrutural", m3_structural_break, "Detecção de pontos em que a estrutura estatística da série muda de forma relevante.", r"C(\tau)=\sum_{k=1}^{K}\sum_{t\in I_k}(x_t-\bar{x}_{I_k})^2", "A segmentação binária procura pontos de mudança que reduzem o custo L2 dentro dos segmentos. As datas encontradas são changepoints estatísticos, não necessariamente eventos causais."),
-    ("Phillips", m4_phillips_curve, "Estimativa não linear da relação entre desemprego, inflação passada e inflação corrente nos EUA.", r"\pi_t=f(u_t,u_{t-12},\pi_{t-12})+\varepsilon_t", "Gradient Boosting constrói uma função preditiva por sucessivas árvores de decisão. A importância por permutação mede quanto o desempenho cai quando uma variável é embaralhada."),
-    ("Nowcasting", m5_nowcasting, "Estimativa corrente da atividade econômica antes da divulgação oficial do IBC-Br.", r"\widehat{IBC}_t=f(FX_t,Selic_t,IPCA_{t-1},U_{t-1})", "Gradient Boosting combina indicadores que podem estar disponíveis antes do IBC-Br. O desempenho é avaliado fora da amostra e comparado ao benchmark ingênuo de persistência."),
-    ("Câmbio", m6_clustering, "Agrupamento de países segundo padrões observados de volatilidade e retorno cambial.", r"\min_{C_1,\ldots,C_k}\sum_{j=1}^{k}\sum_{x_i\in C_j}\lVert x_i-\mu_j\rVert^2", "K-Means minimiza a distância quadrática dos pontos aos centroides. As features são volatilidade cambial rolling de 12 meses, retorno de 3 meses e retorno de 12 meses."),
-    ("Tendência", m7_trend_cycle, "Decomposição não linear entre tendência e ciclo usando um autoencoder com gargalo latente.", r"x\xrightarrow{encoder}z\xrightarrow{decoder}\hat{x},\qquad \min\sum_t(x_t-\hat{x}_t)^2", "O autoencoder aprende uma representação de baixa dimensão em janelas móveis. O componente cíclico é calculado como observado menos a tendência latente reconstruída/calibrada."),
-    ("Sentimento", m8_nlp_sentiment, "Classificação transparente de linguagem hawkish/dovish em comunicados reais fornecidos pelo pesquisador.", r"Score_t=1000\times\frac{N_{hawkish}-N_{dovish}}{N_{palavras}}", "O método usa um dicionário lexical explícito. Termos hawkish aumentam o score e termos dovish reduzem o score; a normalização por mil palavras permite comparar documentos de tamanhos diferentes."),
-    ("Anomalias", m9_anomaly, "Detecção multivariada de meses macroeconomicamente incomuns.", r"s(x)=-Score_{IF}(x),\qquad \hat{y}_t\in\{-1,+1\}", "Isolation Forest isola observações por particionamentos aleatórios. Selic, variação cambial, IPCA e desemprego são padronizados antes da detecção; a contaminação controla a fração esperada de anomalias."),
-    ("Yield Curve", m10_gp_yield_curve, "Modelagem suave da curva de juros do Treasury dos EUA com processo gaussiano e intervalo de incerteza.", r"f(x)\sim\mathcal{GP}(m(x),k(x,x')), \quad y=f(x)+\varepsilon", "O Gaussian Process usa os vértices observados de maturidade do Treasury e uma combinação RBF + ruído. A média posterior fornece a curva estimada e o desvio posterior sustenta a faixa de incerteza."),
+    ("Quant State", m11_quant_state, "Estado quantitativo agregado: fatores macro padronizados, regime, risco e sinal composto.", r"Q_t=w^\top Z_t,\qquad R_t=\tanh(Q_t/2)", "Os dados reais são transformados em fatores z-score com janela móvel. O composite combina crescimento, inflação, juros e câmbio em um estado quantitativo interpretável."),
+    ("Recessão", m1_recession, "Probabilidade de recessão nos EUA usando spread de juros e Logit com regularização Elastic Net.", r"P(y_{t+h}=1\mid X_t)=\sigma(\beta_0+X_t\beta)", "Elastic Net combina penalização L1 e L2. O modelo usa spread 10Y–3M, dinâmica recente e referência NBER."),
+    ("Regimes", m2_regime_hmm, "Identificação não supervisionada de regimes monetários por Hidden Markov Model.", r"P(S_t=j\mid S_{t-1}=i)=A_{ij}", "O HMM estima estados latentes, emissões e matriz de transição sem impor rótulos econômicos previamente."),
+    ("Quebra Estrutural", m3_structural_break, "Detecção de pontos de mudança na estrutura estatística das séries.", r"C(\tau)=\sum_k\sum_{t\in I_k}(x_t-\bar{x}_{I_k})^2", "A segmentação procura changepoints que reduzem o erro intrassegmento."),
+    ("Phillips", m4_phillips_curve, "Relação não linear entre desemprego e inflação nos EUA.", r"\pi_t=f(u_t,u_{t-12},\pi_{t-12})+\varepsilon_t", "Gradient Boosting estima uma função preditiva não linear e sua importância por permutação."),
+    ("Nowcasting", m5_nowcasting, "Estimativa corrente da atividade econômica antes da divulgação oficial.", r"\widehat{IBC}_t=f(FX_t,Selic_t,IPCA_{t-1},U_{t-1})", "Gradient Boosting combina indicadores observáveis e avalia o desempenho fora da amostra."),
+    ("Câmbio", m6_clustering, "Agrupamento quantitativo de países por retorno e volatilidade cambial.", r"\min_C\sum_j\sum_{x_i\in C_j}\lVert x_i-\mu_j\rVert^2", "K-Means agrupa observações por distância aos centroides."),
+    ("Tendência", m7_trend_cycle, "Decomposição não linear entre tendência e ciclo via representação latente.", r"x\rightarrow z\rightarrow\hat{x},\qquad \min\sum_t(x_t-\hat{x}_t)^2", "Autoencoder aprende uma representação de baixa dimensão em janelas móveis."),
+    ("Sentimento", m8_nlp_sentiment, "Classificação transparente de linguagem hawkish/dovish em documentos reais.", r"Score_t=1000\frac{N_{hawkish}-N_{dovish}}{N_{palavras}}", "Dicionário lexical explícito e normalização por mil palavras."),
+    ("Anomalias", m9_anomaly, "Detecção multivariada de observações macroeconomicamente incomuns.", r"s(x)=-Score_{IF}(x)", "Isolation Forest identifica observações isoladas após padronização das variáveis."),
+    ("Yield Curve", m10_gp_yield_curve, "Modelagem probabilística da curva de juros Treasury com Gaussian Process.", r"f(x)\sim\mathcal{GP}(m(x),k(x,x'))", "A média posterior estima a curva e o desvio posterior fornece a incerteza."),
 ]
 
 st.markdown("""
@@ -33,7 +34,7 @@ section[data-testid="stSidebar"] { display:none; }
 header[data-testid="stHeader"] { background:transparent; }
 [data-testid="stMetric"] { background:var(--panel); border:1px solid var(--line); padding:12px 14px; border-radius:8px; }
 [data-testid="stMetricValue"], [data-testid="stMetricLabel"] { font-family:"JetBrains Mono","SFMono-Regular",Consolas,monospace; }
-div[data-baseweb="tab-list"] { gap:4px; border-bottom:1px solid var(--line); }
+div[data-baseweb="tab-list"] { gap:4px; border-bottom:1px solid var(--line); overflow-x:auto; }
 button[data-baseweb="tab"] { height:42px; background:transparent; color:var(--muted); border-radius:7px 7px 0 0; }
 button[data-baseweb="tab"][aria-selected="true"] { color:var(--ink); background:#111c2a; border-bottom:2px solid var(--accent); }
 [data-testid="stDataFrame"] { border:1px solid var(--line); border-radius:7px; }
@@ -52,18 +53,17 @@ hr { border-color:var(--line); }
 st.markdown("""
 <div class="research-header">
   <div class="kicker">QUANTITATIVE MACRO RESEARCH · LIVE PUBLIC DATA</div>
-  <div class="title">Macro-ML Panel</div>
-  <div class="subtitle">Macroeconometria + Machine Learning · 10 modelos · BCB/SGS + FRED · sem dados sintéticos</div>
+  <div class="title">Quantitative Macro Research Terminal</div>
+  <div class="subtitle">Factor Engine · Regime Engine · Signal Engine · Risk Analytics · 11 modelos · BCB/SGS + FRED · sem dados sintéticos</div>
 </div>
 """, unsafe_allow_html=True)
 
-# Tabs intentionally use names only: the module order is visual, not part of the label.
 tabs = st.tabs([name for name, _, _, _, _ in MODULES])
 for tab, (name, module, description, formula, methodology) in zip(tabs, MODULES):
     with tab:
         st.markdown(f"""
         <div class="method-card">
-          <div class="method-title">O que é · {name}</div>
+          <div class="method-title">QUANT ENGINE · {name}</div>
           <div class="method-text">{description}</div>
         </div>
         """, unsafe_allow_html=True)
