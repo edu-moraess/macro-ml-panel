@@ -1,4 +1,4 @@
-"""Factor Engine V2 — robust macro factors with direction, weight, contribution."""
+"""Factor Engine — robust macro factors with direction, weight and contribution."""
 from __future__ import annotations
 
 from dataclasses import dataclass
