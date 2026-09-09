@@ -24,6 +24,7 @@ DEFAULT_SPECS = [
     FactorSpec("FX", +1.0, 1.0),
     FactorSpec("Liquidity", +1.0, 1.0),
     FactorSpec("Momentum", +1.0, 1.0),
+    FactorSpec("Curve", +1.0, 0.75),
 ]
 
 
@@ -46,18 +47,20 @@ class FactorEngine:
         fx_raw: pd.Series,
         liquidity_raw: pd.Series,
         momentum_raw: pd.Series,
+        curve_raw: pd.Series | None = None,
     ) -> pd.DataFrame:
         z = lambda s: rolling_zscore(s, self.window)
-        f = pd.DataFrame(
-            {
-                "Growth": z(growth_raw),
-                "Inflation": z(inflation_raw),
-                "Rates": z(rates_raw),
-                "FX": z(fx_raw),
-                "Liquidity": z(liquidity_raw),
-                "Momentum": z(momentum_raw),
-            }
-        )
+        data = {
+            "Growth": z(growth_raw),
+            "Inflation": z(inflation_raw),
+            "Rates": z(rates_raw),
+            "FX": z(fx_raw),
+            "Liquidity": z(liquidity_raw),
+            "Momentum": z(momentum_raw),
+        }
+        if curve_raw is not None and not curve_raw.empty:
+            data["Curve"] = z(curve_raw.reindex(growth_raw.index))
+        f = pd.DataFrame(data)
         return f.replace([np.inf, -np.inf], np.nan).dropna()
 
     def composite(self, factors: pd.DataFrame) -> pd.Series:
