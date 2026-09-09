@@ -12,10 +12,7 @@ from core.yield_curve import load_history, historical_spreads
 
 def render() -> None:
     st.subheader("MACRO INTELLIGENCE")
-    st.caption(
-        "Quantitative macro research infrastructure — not investment advice. "
-        "signal(t) → outcome(t+1…) anti-lookahead."
-    )
+    st.caption("Quantitative macro research infrastructure — not investment advice. signal(t) → outcome(t+1…) anti-lookahead.")
     window = st.slider("Rolling window (months)", 36, 120, 60, 12, key="mi_window")
     try:
         selic = get_bcb(SGS["selic_meta"]).resample("MS").mean()
@@ -29,10 +26,7 @@ def render() -> None:
     except Exception as exc:
         raise RuntimeError(str(exc)) from exc
 
-    df = align(
-        selic.rename("selic"), ipca.rename("ipca"), cambio.rename("fx"),
-        unemp.rename("u"), ibc.rename("ibc"), vix.rename("vix"), hy.rename("hy"), spx.rename("spx"),
-    )
+    df = align(selic.rename("selic"), ipca.rename("ipca"), cambio.rename("fx"), unemp.rename("u"), ibc.rename("ibc"), vix.rename("vix"), hy.rename("hy"), spx.rename("spx"))
     if len(df) < max(48, window // 2):
         raise ValueError(f"Amostra alinhada insuficiente: {len(df)}")
 
@@ -52,8 +46,7 @@ def render() -> None:
     except Exception:
         pass
 
-    mi = MacroIntelligence(window=window)
-    out = mi.run(growth, inflation, rates, fx, liquidity, momentum, asset_ret, curve_raw=curve_raw)
+    out = MacroIntelligence(window=window).run(growth, inflation, rates, fx, liquidity, momentum, asset_ret, curve_raw=curve_raw)
     reg, sig, cp = out["regime"], out["signal"], out["curve_persistence"]
 
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -65,10 +58,7 @@ def render() -> None:
 
     probs = reg.get("probabilities") or {}
     if probs:
-        st.caption(
-            "  ·  ".join(f"{k} {v:.1f}%" for k, v in sorted(probs.items(), key=lambda x: -x[1]))
-            + f"  ·  method={reg.get('method')}  ·  prev={reg.get('previous')}  ·  {reg.get('transition', '')}"
-        )
+        st.caption("  ·  ".join(f"{k} {v:.1f}%" for k, v in sorted(probs.items(), key=lambda x: -x[1])) + f"  ·  method={reg.get('method')}  ·  prev={reg.get('previous')}  ·  {reg.get('transition', '')}")
 
     st.subheader("FACTOR CONTRIBUTION")
     z, contrib = sig.get("z_latest") or {}, sig.get("contributions") or {}
@@ -76,12 +66,7 @@ def render() -> None:
     for name in ["Growth", "Inflation", "Rates", "FX", "Liquidity", "Momentum", "Curve"]:
         if name not in z and name not in contrib:
             continue
-        rows.append({
-            "Factor": name,
-            "Z-Score": z.get(name, np.nan),
-            "Contribution": contrib.get(name, np.nan),
-            "Direction": "↑" if contrib.get(name, 0) > 0 else "↓" if contrib.get(name, 0) < 0 else "→",
-        })
+        rows.append({"Factor": name, "Z-Score": z.get(name, np.nan), "Contribution": contrib.get(name, np.nan), "Direction": "↑" if contrib.get(name, 0) > 0 else "↓" if contrib.get(name, 0) < 0 else "→"})
     if rows:
         st.dataframe(pd.DataFrame(rows).style.format({"Z-Score": "{:+.2f}", "Contribution": "{:+.3f}"}), use_container_width=True, hide_index=True)
         st.caption(sig.get("methodology", ""))
@@ -100,8 +85,7 @@ def render() -> None:
     hist_lab = out.get("history_labeled")
     if hist_lab is not None and len(hist_lab):
         st.subheader("REGIME HISTORY")
-        code = hist_lab.map({"RISK-OFF": -1, "NEUTRAL": 0, "RISK-ON": 1}).fillna(0)
-        st.line_chart(code.rename("regime_code"), height=180)
+        st.line_chart(hist_lab.map({"RISK-OFF": -1, "NEUTRAL": 0, "RISK-ON": 1}).fillna(0).rename("regime_code"), height=180)
 
     st.subheader("HISTORICAL VALIDATION")
     st.caption("Forward outcomes from t+1 (anti-lookahead). Not investment advice.")
@@ -118,5 +102,9 @@ def render() -> None:
             rows = [{"Horizon": h, "Avg": s.get("avg"), "Median": s.get("median"), "Hit Ratio": s.get("hit_ratio"), "Vol": s.get("vol"), "Avg MDD": s.get("mdd_avg")} for h, s in (ev.get("horizons") or {}).items()]
             if rows:
                 st.dataframe(pd.DataFrame(rows).style.format({"Avg": "{:+.2%}", "Median": "{:+.2%}", "Hit Ratio": "{:.1%}", "Vol": "{:.2%}", "Avg MDD": "{:.2%}"}), use_container_width=True, hide_index=True)
+
+    lineage = out.get("lineage") or {}
+    with st.expander("DATA LINEAGE / REPRODUCIBILITY", expanded=False):
+        st.json(lineage)
 
     st.caption(data_status("BCB/SGS + FRED", "macro intelligence panel", out["factors"].index.max()))
