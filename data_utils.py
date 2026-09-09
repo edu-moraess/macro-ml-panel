@@ -6,7 +6,6 @@ controlled errors; no synthetic or placeholder observations are ever generated.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from io import StringIO
 from typing import Final
 
 import pandas as pd
@@ -16,7 +15,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BCB_BASE: Final[str] = "https://api.bcb.gov.br/dados/serie/bcdata.sgs"
-FRED_URL: Final[str] = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}&download=1"
+FRED_API_URL: Final[str] = "https://api.stlouisfed.org/fred/series/observations"
 CACHE_TTL_SECONDS: Final[int] = 900
 BCB_MAX_OBSERVATIONS: Final[int] = 10000
 HTTP_TIMEOUT_SECONDS: Final[int] = 10
@@ -51,7 +50,7 @@ def _session(retries: int = 1) -> requests.Session:
     )
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Macro-ML-Panel/2.1 (+research; public-data-client)",
+        "User-Agent": "Macro-ML-Panel/2.2 (+research; public-data-client)",
         "Accept": "application/json, text/csv, */*",
     })
     session.mount("https://", HTTPAdapter(max_retries=retry))
@@ -106,43 +105,57 @@ def get_bcb(code: int, start: str | None = None) -> pd.Series:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def get_fred(code: str, start: str | None = None) -> pd.Series:
-    """Fetch a real FRED series through the public CSV download endpoint.
-
-    The request is deliberately bounded so a blocked/slow FRED connection cannot
-    leave the Streamlit page spinning indefinitely. No fallback data are created.
-    """
+    """Fetch real FRED observations through the official API using Streamlit Secrets."""
     code = str(code).strip().upper()
     if not code or not code.replace("_", "").isalnum():
         raise ValueError(f"Código FRED inválido: {code!r}")
 
-    url = FRED_URL.format(code=code)
+    api_key = str(st.secrets.get("FRED_API_KEY", "")).strip()
+    if not api_key:
+        raise RuntimeError(
+            "FRED_API_KEY não configurada nos Streamlit Secrets. "
+            "Adicione a chave da FRED em Settings → Secrets. Fonte: FRED; sem fallback sintético."
+        )
+
+    params: dict[str, str] = {
+        "series_id": code,
+        "api_key": api_key,
+        "file_type": "json",
+        "sort_order": "asc",
+    }
+    if start:
+        params["observation_start"] = pd.Timestamp(start).strftime("%Y-%m-%d")
+
     try:
-        response = _session(retries=0).get(url, timeout=HTTP_TIMEOUT_SECONDS)
+        response = _session(retries=0).get(
+            FRED_API_URL,
+            params=params,
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
         response.raise_for_status()
-        if not response.text.strip():
-            raise ValueError("FRED retornou uma resposta vazia")
+        payload = response.json()
+        observations = payload.get("observations")
+        if not isinstance(observations, list) or not observations:
+            raise ValueError("FRED retornou zero observações")
 
-        df = pd.read_csv(StringIO(response.text))
-        if df.shape[1] < 2:
-            raise ValueError(f"CSV FRED inválido: {df.shape[1]} coluna(s) recebida(s)")
+        df = pd.DataFrame(observations)
+        if not {"date", "value"}.issubset(df.columns):
+            raise ValueError("resposta FRED sem os campos obrigatórios 'date' e 'value'")
 
-        date_col = "DATE" if "DATE" in df.columns else df.columns[0]
-        value_col = code if code in df.columns else df.columns[1]
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-        df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
-        series = df.dropna(subset=[date_col, value_col]).set_index(date_col)[value_col].sort_index()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        series = df.dropna(subset=["date", "value"]).set_index("date")["value"].sort_index()
 
-        if start:
-            series = series[series.index >= pd.Timestamp(start)]
         if series.empty:
-            raise ValueError("FRED retornou zero observações numéricas para o período solicitado")
+            raise ValueError("FRED retornou zero observações numéricas")
 
         series.name = code
         return series
     except requests.RequestException as exc:
         raise RuntimeError(
             f"FRED série {code}: conexão indisponível após {HTTP_TIMEOUT_SECONDS}s. "
-            "Verifique o acesso de rede do Streamlit Cloud. Fonte: FRED; sem fallback sintético."
+            "Verifique FRED_API_KEY e o acesso de rede do Streamlit Cloud. "
+            "Fonte: Federal Reserve Bank of St. Louis; sem fallback sintético."
         ) from exc
     except Exception as exc:
         raise RuntimeError(
