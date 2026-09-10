@@ -1,4 +1,4 @@
-"""Regime Engine 2.1 — cached HMM/GMM with probabilities, duration, transitions, persistence.
+"""Regime Engine — cached HMM/GMM with probabilities, duration, transitions, persistence.
 
 Fallback to GMM is EXPLICIT (method field never claims HMM when GMM is used).
 The fitted model is cached by Streamlit so ordinary UI reruns do not refit it.

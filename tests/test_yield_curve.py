@@ -40,7 +40,7 @@ def test_regime_inverted():
 def test_regime_steepening():
     f = {"slope_10y2y_bps": 200.0, "slope_30y10y_bps": 30.0, "n_vertices": 8}
     r = classify_curve_regime(f)
-    assert r["regime"] == "STEEPING"
+    assert r["regime"] == "STEEPENING"
 
 
 def test_regime_long_end_pressure():

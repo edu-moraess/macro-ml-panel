@@ -1,4 +1,4 @@
-"""Core quantitative engines for Macro Quant Research Terminal V2.2."""
+"""Core quantitative engines for the Macro Quant Research Terminal."""
 from .features import FeatureEngine
 from .factors import FactorEngine
 from .regimes import RegimeEngine
