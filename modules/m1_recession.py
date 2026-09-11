@@ -101,13 +101,30 @@ def _calibration_frame(oos: pd.DataFrame, bins: int = 5) -> pd.DataFrame:
     return pd.DataFrame({"Predito": mean_pred, "Observado": frac})
 
 
+def _alert_diagnostics(oos: pd.DataFrame, threshold: float) -> dict[str, float]:
+    p = oos["elastic_net"]
+    signal = (p >= threshold) & (p.shift(1).fillna(0) < threshold)
+    hits = int(((signal) & (oos["target"] >= 1)).sum())
+    alerts = int(signal.sum())
+    false_positives = alerts - hits
+    return {
+        "alerts": alerts,
+        "hits": hits,
+        "false_positives": false_positives,
+        "precision": hits / alerts if alerts else np.nan,
+    }
+
+
 def _lead_time_table(oos: pd.DataFrame, usrec: pd.Series, threshold: float) -> pd.DataFrame:
     """Find first OOS threshold crossing before each NBER recession start."""
     starts = usrec[(usrec >= 1) & (usrec.shift(1).fillna(0) < 1)].index
     rows: list[dict[str, object]] = []
     for start in starts:
-        history = oos.loc[oos.index < start].tail(36)
-        hit = history[history["elastic_net"] >= threshold]
+        history = oos.loc[oos.index < start].tail(36).copy()
+        crossing = (history["elastic_net"] >= threshold) & (
+            history["elastic_net"].shift(1).fillna(0) < threshold
+        )
+        hit = history.loc[crossing]
         if hit.empty:
             rows.append({"Recessão iniciada": start, "Sinal >= limiar": pd.NaT, "Lead time (meses)": np.nan})
             continue
@@ -174,10 +191,10 @@ def render() -> None:
     st.dataframe(comparison.style.format("{:.3f}"), use_container_width=True)
     st.caption(f"Walk-forward expanding window · treino mínimo: {min_train} observações · OOS: {len(oos):,}")
 
-    st.subheader("Probabilidade histórica OOS")
+    st.subheader(f"Probabilidade histórica OOS — horizonte {horizon}M")
     if len(oos):
         chart = oos[["elastic_net", "target"]].rename(
-            columns={"elastic_net": "P(recessão 12M)", "target": "Evento futuro"}
+            columns={"elastic_net": f"P(recessão {horizon}M)", "target": "Evento futuro"}
         )
         st.line_chart(chart)
 
@@ -189,6 +206,14 @@ def render() -> None:
         st.caption("Quanto mais próxima a curva estiver da diagonal, melhor a calibração probabilística.")
     else:
         st.info("Dados OOS insuficientes para uma curva de calibração estável.")
+
+    st.subheader(f"Alertas históricos — limiar {threshold:.0%}")
+    alert = _alert_diagnostics(oos, threshold)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Alertas", f"{alert['alerts']}")
+    c2.metric("Alertas seguidos por evento", f"{alert['hits']}")
+    c3.metric("Falsos positivos", f"{alert['false_positives']}")
+    c4.metric("Precisão do alerta", f"{alert['precision']:.1%}" if np.isfinite(alert["precision"]) else "—")
 
     st.subheader(f"Lead time histórico — limiar {threshold:.0%}")
     lead = _lead_time_table(oos, df["usrec"], threshold)
@@ -209,18 +234,18 @@ def render() -> None:
     st.dataframe(coef.to_frame(), use_container_width=True)
     st.caption("Coeficientes são calculados sobre features padronizadas; sinal positivo aumenta a contribuição para a classe recessão.")
 
-    st.subheader("Diagnóstico de cobertura e limitações")
+    st.subheader("Cobertura das séries")
     coverage = pd.DataFrame(
         {
-            "Última observação": [feature_df[k].dropna().index.max() for k in FEATURES],
-            "N observações": [int(feature_df[k].notna().sum()) for k in FEATURES],
+            "Última observação": [series[k].dropna().index.max() for k in FEATURES],
+            "N observações": [int(series[k].notna().sum()) for k in FEATURES],
         },
         index=[FEATURE_LABELS[k] for k in FEATURES],
     )
     st.dataframe(coverage, use_container_width=True)
     st.info(
-        "O modelo agora combina curva de juros, mercado, desemprego, condições financeiras e volatilidade. "
-        "A probabilidade continua sendo condicional às séries selecionadas, não uma previsão macroeconômica completa. "
+        "O modelo combina curva de juros, mercado, desemprego, condições financeiras e volatilidade. "
+        "A probabilidade é condicional às séries selecionadas, não uma previsão macroeconômica completa. "
         "As séries FRED podem sofrer revisões históricas; esta validação não usa vintages em tempo real."
     )
     st.caption(data_status("Federal Reserve Bank of St. Louis · FRED", ", ".join(FEATURES) + " / USREC", feature_df.index.max()))
