@@ -35,10 +35,10 @@ SGS: Final[dict[str, int]] = {
 # Transport for these Brazilian macro series is now provided by IPEADATA and,
 # for PTAX/FX, Yahoo Finance. The application no longer depends on BCB/SGS.
 BRAZIL_PROVIDER: Final[dict[int, str]] = {
-    432: "BM12_TJOVER12",          # Selic monthly, IPEA
-    433: "PRECOS12_IPCAG12",       # IPCA monthly variation, IPEA
-    24363: "SGS12_IBCBRDESSAZ12",  # IBC-Br real seasonally adjusted, IPEA mirror
-    24369: "PNADC12_TDESOC12",     # unemployment, IPEA
+    432: "BM12_TJOVER12",
+    433: "PRECOS12_IPCAG12",
+    24363: "SGS12_IBCBRDESSAZ12",
+    24369: "PNADC12_TDESOC12",
 }
 
 FRED: Final[dict[str, str]] = {
@@ -80,11 +80,24 @@ def _session(retries: int = 2) -> requests.Session:
         "Accept": "application/json, text/csv, */*",
     })
     session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.mount("http://", HTTPAdapter(max_retries=retry))
     return session
 
 
-def _parse_ipea(payload: dict[str, Any], code: str) -> pd.Series:
-    values = payload.get("value") if isinstance(payload, dict) else None
+def _parse_ipea(payload: Any, code: str) -> pd.Series:
+    """Parse IPEA OData responses in both object and list-wrapped forms."""
+    values = None
+    if isinstance(payload, dict):
+        values = payload.get("value")
+    elif isinstance(payload, list):
+        # Some gateways/versions wrap the OData object in a one-item list.
+        for item in payload:
+            if isinstance(item, dict) and isinstance(item.get("value"), list):
+                values = item["value"]
+                break
+        if values is None:
+            values = payload
+
     if not isinstance(values, list) or not values:
         raise ValueError(f"IPEA série {code} retornou zero observações")
     df = pd.DataFrame(values)
@@ -132,25 +145,29 @@ def get_brazil_series(key: int, start: str | None = None) -> pd.Series:
     ipea_code = BRAZIL_PROVIDER.get(key)
     if not ipea_code:
         raise ValueError(f"Nenhum provedor alternativo configurado para série brasileira {key}")
-    try:
-        response = _session(2).get(IPEA_BASE.format(ipea_code), timeout=HTTP_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        series = _parse_ipea(response.json(), ipea_code)
-        series = series[(series.index >= requested_start) & (series.index <= requested_end)]
-        if series.empty:
-            raise ValueError(f"IPEA {ipea_code} não possui observações no período")
-        return series.rename(str(key))
-    except requests.RequestException as exc:
-        raise RuntimeError(
-            f"IPEA série {ipea_code}: conexão/API indisponível após {HTTP_TIMEOUT_SECONDS}s. "
-            "Fonte: IPEA Data; sem fallback sintético."
-        ) from exc
-    except Exception as exc:
-        raise RuntimeError(f"IPEA série {ipea_code}: {exc}. Sem fallback sintético.") from exc
+
+    last_error: Exception | None = None
+    for base in (IPEA_BASE, IPEA_BASE.replace("https://", "http://")):
+        try:
+            response = _session(2).get(base.format(ipea_code), timeout=HTTP_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            series = _parse_ipea(response.json(), ipea_code)
+            series = series[(series.index >= requested_start) & (series.index <= requested_end)]
+            if series.empty:
+                raise ValueError(f"IPEA {ipea_code} não possui observações no período")
+            return series.rename(str(key))
+        except requests.RequestException as exc:
+            last_error = exc
+        except Exception as exc:
+            last_error = exc
+            break
+
+    raise RuntimeError(
+        f"IPEA série {ipea_code}: API indisponível ou resposta incompatível. "
+        "Fonte: IPEA Data; sem fallback sintético."
+    ) from last_error
 
 
-# Compatibility surface: all existing modules keep calling get_bcb(code), but
-# the function now routes Brazilian series through the alternative providers.
 def get_bcb(code: int, start: str | None = None) -> pd.Series:
     return get_brazil_series(int(code), start=start)
 
@@ -199,13 +216,7 @@ def data_status(source: str, reference: str, last_date: pd.Timestamp) -> str:
 
 
 def series_quality(series: pd.Series, source: str = "", series_id: str = "") -> dict[str, Any]:
-    """Assess freshness and coverage without treating weekends/holidays as missing.
-
-    Daily market series are evaluated by abnormal calendar gaps instead of a
-    naive observation-count ratio. Monthly/low-frequency series are evaluated
-    against their actual calendar periods. This prevents normal non-trading days
-    from being reported as 30%+ missing data.
-    """
+    """Assess freshness and coverage without treating weekends/holidays as missing."""
     if series is None or series.empty:
         return {"source": source or "—", "series_id": series_id or "—", "name": "—", "freq": "—", "first_obs": None, "last_obs": None, "n_obs": 0, "missing_rate": 1.0, "freshness_days": None, "status": "DADOS INDISPONÍVEIS"}
 
@@ -217,14 +228,11 @@ def series_quality(series: pd.Series, source: str = "", series_id: str = "") -> 
     first = idx.min()
     last = idx.max()
 
-    # For raw daily market data, weekends and exchange holidays are expected.
-    # Report only unusually long gaps; do not convert them into a missing rate.
     abnormal_gap_days = 0
     missing_rate = 0.0
     if n > 1:
         diffs = pd.Series(idx[1:] - idx[:-1]).dt.days.astype(float)
         if "Daily" in freq:
-            # A >7-calendar-day gap is abnormal for a daily market series.
             abnormal_gap_days = int((diffs > 7).sum())
             if abnormal_gap_days:
                 missing_rate = min(1.0, abnormal_gap_days / max(n - 1, 1))
