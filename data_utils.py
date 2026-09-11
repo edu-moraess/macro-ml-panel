@@ -106,8 +106,6 @@ def get_brazil_series(key: int, start: str | None = None) -> pd.Series:
     requested_end = pd.Timestamp.now().normalize()
 
     if key == 1:
-        # Yahoo Finance BRL=X is a public market-data endpoint and is used only
-        # for the FX series; no synthetic observations or fallback values.
         try:
             period1 = int(requested_start.tz_localize("UTC").timestamp())
             period2 = int((requested_end + pd.Timedelta(days=1)).tz_localize("UTC").timestamp())
@@ -201,27 +199,69 @@ def data_status(source: str, reference: str, last_date: pd.Timestamp) -> str:
 
 
 def series_quality(series: pd.Series, source: str = "", series_id: str = "") -> dict[str, Any]:
+    """Assess freshness and coverage without treating weekends/holidays as missing.
+
+    Daily market series are evaluated by abnormal calendar gaps instead of a
+    naive observation-count ratio. Monthly/low-frequency series are evaluated
+    against their actual calendar periods. This prevents normal non-trading days
+    from being reported as 30%+ missing data.
+    """
     if series is None or series.empty:
         return {"source": source or "—", "series_id": series_id or "—", "name": "—", "freq": "—", "first_obs": None, "last_obs": None, "n_obs": 0, "missing_rate": 1.0, "freshness_days": None, "status": "DADOS INDISPONÍVEIS"}
+
     sid = series_id or str(series.name)
     meta = SERIES_META.get(sid, {})
-    n = len(series)
-    span_days = max((series.index.max() - series.index.min()).days, 1)
+    freq = meta.get("freq", "")
+    idx = pd.DatetimeIndex(series.index).dropna().sort_values().unique()
+    n = len(idx)
+    first = idx.min()
+    last = idx.max()
+
+    # For raw daily market data, weekends and exchange holidays are expected.
+    # Report only unusually long gaps; do not convert them into a missing rate.
+    abnormal_gap_days = 0
     missing_rate = 0.0
-    if n > 2:
-        diffs = series.index.to_series().diff().dt.days.dropna()
-        median_gap = diffs.median()
-        if median_gap and median_gap > 0:
-            expected = int(span_days / median_gap) + 1
-            missing_rate = max(0.0, 1.0 - n / expected)
-    last = series.index.max()
-    freshness = (pd.Timestamp.now().normalize() - last).days
+    if n > 1:
+        diffs = pd.Series(idx[1:] - idx[:-1]).dt.days.astype(float)
+        if "Daily" in freq:
+            # A >7-calendar-day gap is abnormal for a daily market series.
+            abnormal_gap_days = int((diffs > 7).sum())
+            if abnormal_gap_days:
+                missing_rate = min(1.0, abnormal_gap_days / max(n - 1, 1))
+        elif "Monthly" in freq or freq == "Annual":
+            period_index = idx.to_period("M" if "Monthly" in freq else "Y")
+            expected = pd.period_range(period_index.min(), period_index.max(), freq=period_index.freqstr)
+            observed = pd.Index(period_index.unique())
+            missing_rate = max(0.0, 1.0 - len(observed) / max(len(expected), 1))
+        else:
+            median_gap = diffs.median()
+            if median_gap and median_gap > 0:
+                expected = int((last - first).days / median_gap) + 1
+                missing_rate = max(0.0, 1.0 - n / max(expected, 1))
+
+    freshness = (pd.Timestamp.now().normalize() - pd.Timestamp(last).normalize()).days
     status = "OK"
-    if freshness > 90: status = "STALE"
-    elif freshness > 45: status = "LAG"
-    if n < 24: status = "AMOSTRA CURTA"
-    if missing_rate > 0.15: status = "GAPS"
-    return {"source": meta.get("source", source) or "—", "series_id": sid, "name": meta.get("name", sid), "freq": meta.get("freq", "—"), "first_obs": series.index.min(), "last_obs": last, "n_obs": n, "missing_rate": round(float(missing_rate), 4), "freshness_days": int(freshness), "status": status}
+    if freshness > 90:
+        status = "STALE"
+    elif freshness > 45:
+        status = "LAG"
+    if n < 24:
+        status = "AMOSTRA CURTA"
+    if abnormal_gap_days > 0 or missing_rate > 0.15:
+        status = "GAPS"
+
+    return {
+        "source": meta.get("source", source) or "—",
+        "series_id": sid,
+        "name": meta.get("name", sid),
+        "freq": freq or "—",
+        "first_obs": first,
+        "last_obs": last,
+        "n_obs": n,
+        "missing_rate": round(float(missing_rate), 4),
+        "freshness_days": int(freshness),
+        "status": status,
+    }
 
 
 def format_quality_line(q: dict[str, Any]) -> str:
