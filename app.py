@@ -1,15 +1,9 @@
 """Macro Quant Research Terminal — macro intelligence and historical validation."""
 from __future__ import annotations
 
-import streamlit as st
+import importlib
 
-from modules import (
-    m1_recession, m2_regime_hmm, m3_structural_break, m4_phillips_curve,
-    m5_nowcasting, m6_clustering, m7_trend_cycle, m8_nlp_sentiment,
-    m9_anomaly, m10_gp_yield_curve, m11_quant_state, m12_quant_lab,
-    m13_world_bank,
-)
-from modules import data_quality, macro_intelligence
+import streamlit as st
 
 st.set_page_config(
     page_title="Quant Macro Terminal",
@@ -47,26 +41,27 @@ div[data-baseweb="radio"] label:has(input:checked){{color:var(--ink);background:
 </style>""", unsafe_allow_html=True)
 st.markdown('<div class="terminal-header"><div><div class="kicker">QUANT RESEARCH</div><div class="title">Macro Terminal</div></div></div>', unsafe_allow_html=True)
 
+# Keep module metadata lightweight. The actual Python module is imported only
+# after the user selects it, so a broken optional dependency in another module
+# cannot prevent the terminal itself from booting.
 MODULES = [
-    ("GLOBAL MACRO", m13_world_bank, "World Bank WDI · growth · inflation · labor · external sector · reserves.", r"X_{c,t}=WDI_{c,t}"),
-    ("MACRO INTELLIGENCE", macro_intelligence, "Score · Regime · Contributions · Historical Validation.", r"S_t \\to R_t \\to E[r_{t+h}]"),
-    ("QUANT STATE", m11_quant_state, "Macro state: regime, score, factors, curve.", r"Q_t=w^\\top Z_t"),
-    ("QUANT LAB", m12_quant_lab, "Factors · Signals · Risk · TS · Backtest · Portfolio.", r"S_t=\\sum_i w_i z_{i,t}"),
-    ("YIELD CURVE", m10_gp_yield_curve, "Curve factors, GP construction, regime, history.", r"f\\sim GP"),
-    ("DATA QUALITY", data_quality, "Provenance e status das séries internacionais e de mercado.", r""),
-    ("Recessão", m1_recession, "Elastic Net Logit — probabilidade de recessão.", r"P(y=1|X)=\\sigma(\\beta_0+X\\beta)"),
-    ("Regimes HMM", m2_regime_hmm, "HMM monetário legado.", r"P(S_t=j|S_{t-1}=i)=A_{ij}"),
-    ("Quebra", m3_structural_break, "Changepoint detection.", r"C(\\tau)"),
-    ("Phillips", m4_phillips_curve, "Desemprego × inflação.", r"\\pi_t=f(u_t)"),
-    ("Nowcasting", m5_nowcasting, "Atividade corrente.", r"\\widehat{IBC}_t"),
-    ("Câmbio", m6_clustering, "Clustering cambial.", r"K-Means"),
-    ("Tendência", m7_trend_cycle, "Autoencoder tendência-ciclo.", r"x\\to z\\to\\hat{x}"),
-    ("Sentimento", m8_nlp_sentiment, "Hawkish/dovish lexicon.", r"Score"),
-    ("Anomalias", m9_anomaly, "Isolation Forest.", r"s(x)"),
+    ("GLOBAL MACRO", "modules.m13_world_bank", "World Bank WDI · growth · inflation · labor · external sector · reserves.", r"X_{c,t}=WDI_{c,t}"),
+    ("MACRO INTELLIGENCE", "modules.macro_intelligence", "Score · Regime · Contributions · Historical Validation.", r"S_t \\to R_t \\to E[r_{t+h}]"),
+    ("QUANT STATE", "modules.m11_quant_state", "Macro state: regime, score, factors, curve.", r"Q_t=w^\\top Z_t"),
+    ("QUANT LAB", "modules.m12_quant_lab", "Factors · Signals · Risk · TS · Backtest · Portfolio.", r"S_t=\\sum_i w_i z_{i,t}"),
+    ("YIELD CURVE", "modules.m10_gp_yield_curve", "Curve factors, GP construction, regime, history.", r"f\\sim GP"),
+    ("DATA QUALITY", "modules.data_quality", "Provenance e status das séries internacionais e de mercado.", r""),
+    ("Recessão", "modules.m1_recession", "Elastic Net Logit — probabilidade de recessão.", r"P(y=1|X)=\\sigma(\\beta_0+X\\beta)"),
+    ("Regimes HMM", "modules.m2_regime_hmm", "HMM monetário legado.", r"P(S_t=j|S_{t-1}=i)=A_{ij}"),
+    ("Quebra", "modules.m3_structural_break", "Changepoint detection.", r"C(\\tau)"),
+    ("Phillips", "modules.m4_phillips_curve", "Desemprego × inflação.", r"\\pi_t=f(u_t)"),
+    ("Nowcasting", "modules.m5_nowcasting", "Atividade corrente.", r"\\widehat{IBC}_t"),
+    ("Câmbio", "modules.m6_clustering", "Clustering cambial.", r"K-Means"),
+    ("Tendência", "modules.m7_trend_cycle", "Autoencoder tendência-ciclo.", r"x\\to z\\to\\hat{x}"),
+    ("Sentimento", "modules.m8_nlp_sentiment", "Hawkish/dovish lexicon.", r"Score"),
+    ("Anomalias", "modules.m9_anomaly", "Isolation Forest.", r"s(x)"),
 ]
 
-# Only the selected module is rendered. This prevents every model and API call
-# from executing on each Streamlit rerun.
 module_names = [x[0] for x in MODULES]
 if "active_module" not in st.session_state or st.session_state.active_module not in module_names:
     st.session_state.active_module = module_names[0]
@@ -78,8 +73,7 @@ selected_name = st.radio(
     label_visibility="collapsed",
     key="active_module",
 )
-selected = next(item for item in MODULES if item[0] == selected_name)
-name, module, description, formula = selected
+name, module_path, description, formula = next(x for x in MODULES if x[0] == selected_name)
 
 st.markdown(
     f'<div class="method-card"><div class="method-title">{name}</div>'
@@ -91,7 +85,11 @@ if formula:
         st.latex(formula)
 
 try:
+    module = importlib.import_module(module_path)
     module.render()
+except ModuleNotFoundError as exc:
+    st.error("DEPENDÊNCIA AUSENTE — o módulo selecionado não pôde ser carregado.")
+    st.caption(f"Módulo: {module_path} · Dependência: {exc.name}")
 except RuntimeError as exc:
     st.error("DADOS INDISPONÍVEIS — o modelo não foi executado.")
     st.caption(str(exc))
@@ -102,4 +100,4 @@ except Exception as exc:
     st.error("FALHA CONTROLADA — o módulo não pôde ser calculado.")
     st.caption(f"Detalhe operacional: {exc}")
 
-st.markdown('<div class="provenance">PUBLIC DATA · WORLD BANK WDI + FRED · BRASIL FORA DO UNIVERSO GLOBAL · SEM DADOS SINTÉTICOS · CACHE 15 MIN</div>', unsafe_allow_html=True)
+st.markdown('<div class="provenance">PUBLIC DATA · WORLD BANK WDI + FRED · BRASIL VIA IPEA/YAHOO · SEM DADOS SINTÉTICOS · CACHE 15 MIN</div>', unsafe_allow_html=True)
